@@ -374,6 +374,11 @@ describe('post-write disk confirmation', () => {
     await vi.advanceTimersByTimeAsync(400);
     expect(card(0).querySelector('.kioku-candidate-message').textContent).toContain('もう一度保存します');
     expect(notices).toEqual([]);
+    // Waits longer than Obsidian's ~2 s save debounce before rewriting.
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(processCalls(app)).toBe(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(processCalls(app)).toBe(2);
     await settle();
     expect(processCalls(app)).toBe(2);
     expect(notices).toHaveLength(1); expect(notices[0]).toMatch(/^Kioku：採用しました（kioku-\w{10}）。$/);
@@ -382,6 +387,40 @@ describe('post-write disk confirmation', () => {
     expect(final).toContain(notices[0].match(/kioku-\w{10}/)[0]);
     expect(final.endsWith('hoverTyped')).toBe(true);
     expect(card(0).querySelector('.kioku-candidate-meta').textContent).toMatch(/^3 行目 · 採用済み · kioku-/);
+  });
+
+  for (const how of ['close', 'unload']) {
+    it(`stops recovery on ${how} during the quiet wait: no write, no later failure Notice`, async () => {
+      const { app, plugin, file } = openNote(NOTE, { mode: 'preview' });
+      extractCommand(plugin).checkCallback(false); await flush();
+      card(0).querySelector('.kioku-candidate-adopt').click();
+      await vi.advanceTimersByTimeAsync(300);
+      app.modify(file.path, `${NOTE}hoverTyped`);
+      await vi.advanceTimersByTimeAsync(800);
+      expect(card(0).querySelector('.kioku-candidate-message').textContent).toContain('もう一度保存します');
+      if (how === 'close') document.querySelector('.kioku-candidate-close').click(); else plugin.onunload();
+      await vi.advanceTimersByTimeAsync(20000);
+      expect(notices).toEqual(how === 'close' ? ['Kioku：保存の確認前に閉じました。もう一度抽出して採用済みか確認してください。'] : []);
+      expect(processCalls(app)).toBe(1);
+      expect(app.modifyListeners.size).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+  }
+
+  it('confirms the previous ID without writing again when it is back on disk after the quiet wait', async () => {
+    const { app, plugin, file } = openNote(NOTE, { mode: 'preview' });
+    extractCommand(plugin).checkCallback(false); await flush();
+    card(0).querySelector('.kioku-candidate-adopt').click();
+    await vi.advanceTimersByTimeAsync(300);
+    const adopted = app.files[file.path];
+    app.modify(file.path, NOTE); // briefly overwritten…
+    await vi.advanceTimersByTimeAsync(400);
+    expect(card(0).querySelector('.kioku-candidate-message').textContent).toContain('もう一度保存します');
+    app.modify(file.path, adopted); // …then e.g. a sync restores the adopted version
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(processCalls(app)).toBe(1);
+    expect(notices).toEqual([`Kioku：採用しました（${adopted.match(/kioku-\w{10}/)[0]}）。`]);
+    expect(app.files[file.path]).toBe(adopted);
   });
 
   it('gives up honestly after one retry when the other view keeps saving over the note', async () => {

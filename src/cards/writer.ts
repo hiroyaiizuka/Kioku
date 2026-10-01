@@ -174,7 +174,7 @@ export interface QuietTiming {
   readonly quietDeadlineMs: number;
 }
 
-export const QUIET_TIMING: QuietTiming = { intervalMs: 250, quietMs: 1000, quietDeadlineMs: 10000 };
+export const QUIET_TIMING: QuietTiming = { intervalMs: 250, quietMs: 2500, quietDeadlineMs: 12000 };
 
 /** Resolves true once `file` had no `modify` event for `quietMs`; false on timeout or abort. */
 async function waitUntilQuiet(app: App, file: TFile, signal: AbortSignal, timing: QuietTiming): Promise<boolean> {
