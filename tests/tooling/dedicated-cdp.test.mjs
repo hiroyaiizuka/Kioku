@@ -49,7 +49,8 @@ describe('waitForDedicatedPage (CDP simulation)', () => {
 });
 
 /** Simulated Obsidian restricted-mode state on one page; records the order of harness actions. */
-async function pluginServer({ enabled = false, choice = null, trust = true, loaded = ['kioku'], configured = ['kioku'] } = {}) {
+async function pluginServer({ enabled = false, choice = null, trust = true, loaded = ['kioku'], configured = ['kioku'],
+  lateModal = false } = {}) {
   const sim = { enabled, choice, trust, events: [] };
   const server = await startCdpServer([{ path: '/main', title: 'test-vault - Obsidian 1.14.3' }], (_path, message) => {
     if (message.method === 'Input.dispatchKeyEvent') {
@@ -66,7 +67,8 @@ async function pluginServer({ enabled = false, choice = null, trust = true, load
     }
     if (expression.includes('enabledPlugins')) {
       return evaluated({ enabled: sim.enabled, loaded: sim.enabled ? loaded : [], configured,
-        modals: sim.trust ? [{ kioku: false, classes: 'modal mod-trust-folder' }] : [] });
+        modals: sim.trust ? [{ kioku: false, classes: 'modal mod-trust-folder' }]
+          : lateModal ? [{ kioku: false, classes: 'modal mod-settings' }] : [] });
     }
     throw new Error(`Unexpected expression: ${expression}`);
   });
@@ -89,6 +91,10 @@ describe('enableCommunityPlugins (CDP simulation)', () => {
     const { sim, target } = await pluginServer({ choice: 'false', trust: false });
     await enableCommunityPlugins({ target });
     expect(sim.events).toEqual(['setEnable']);
+  });
+  it('fails when a foreign modal is still open at final verification', async () => {
+    const { target } = await pluginServer({ enabled: true, choice: 'true', trust: false, lateModal: true });
+    await expect(enableCommunityPlugins({ target, verifyTimeoutMs: 300 })).rejects.toThrow(/Unexpected foreign modal open.*mod-settings/);
   });
   for (const [label, plugins] of [['loaded', { loaded: ['kioku', 'other'] }], ['configured', { configured: ['kioku', 'other'] }]]) {
     it(`fails when a non-Kioku plugin is ${label}`, async () => {

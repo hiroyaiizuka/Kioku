@@ -2,8 +2,9 @@
 // The user's own Obsidian keeps running: Electron's single-instance lock is per --user-data-dir, so this
 // instance uses a profile inside the project and is identified/terminated only by its recorded PID.
 import { spawn, spawnSync } from 'node:child_process';
-import { accessSync, closeSync, constants, lstatSync, openSync, readdirSync, readFileSync, statSync, unlinkSync,
-  writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { accessSync, closeSync, constants, linkSync, lstatSync, openSync, readdirSync, readFileSync, renameSync, statSync,
+  unlinkSync, writeFileSync } from 'node:fs';
 import { connect, createServer } from 'node:net';
 import { userInfo } from 'node:os';
 import { isAbsolute, join, normalize } from 'node:path';
@@ -259,24 +260,48 @@ export function childEnvironment(env, home) {
   return result;
 }
 
-/** Exclusive launch lock holding the launcher PID; a lock whose owner PID is dead (e.g. Ctrl-C) is stale. */
+/** Read a lock's owner text; null when it vanished meanwhile (another launcher won a race). */
+function lockOwner(root, file) {
+  try { return safeRead(root, file).toString('utf8').trim(); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+}
+
+/**
+ * Exclusive launch lock holding the launcher PID. A lock whose owner PID is dead (e.g. Ctrl-C) is stale and is
+ * recovered by renaming it to a unique name first, then checking the renamed bytes are still the dead owner's: if a
+ * concurrent launcher replaced it in between, its fresh lock is restored (never deleted). Races retry a bounded number
+ * of times. `system.lockRace(stage)` is a test-only hook to interleave a competing launcher.
+ */
 function acquireLaunchLock(root, paths, system) {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  const me = String(system.pid ?? process.pid);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
     safePath(root, paths.lock, 'file', true);
     try {
       const fd = openSync(paths.lock, 'wx', 0o600);
-      try { writeFileSync(fd, `${system.pid ?? process.pid}\n`); } finally { closeSync(fd); }
-      return;
+      try { writeFileSync(fd, `${me}\n`); } finally { closeSync(fd); }
+      return me;
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
     }
-    const owner = safeRead(root, paths.lock).toString('utf8').trim();
+    system.lockRace?.('exists');
+    const owner = lockOwner(root, paths.lock);
+    if (owner === null) continue; // Released meanwhile: try again.
     if (!/^\d+$/u.test(owner) || isAlive(Number(owner), system)) {
       throw new Error(`Another harness:launch (pid ${owner || 'unknown'}) holds ${paths.lock}. If none is running, delete that file and retry.`);
     }
-    unlinkSync(paths.lock); // Stale: its owner is gone.
+    system.lockRace?.('stale');
+    const moved = `${paths.lock}.stale-${me}-${randomUUID()}`;
+    safePath(root, moved, 'file', true);
+    try { renameSync(paths.lock, moved); }
+    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    if (lockOwner(root, moved) !== owner) {
+      // We moved a competitor's fresh lock: put it back unless a newer lock already exists, then re-evaluate.
+      try { linkSync(moved, paths.lock); }
+      catch (error) { if (error.code !== 'EEXIST') throw error; }
+    }
+    unlinkSync(moved);
   }
-  throw new Error(`Could not acquire ${paths.lock}.`);
+  throw new Error(`Could not acquire ${paths.lock} (concurrent launches); retry.`);
 }
 
 /**
@@ -288,9 +313,9 @@ export async function launchDedicated(root, env = process.env, system = defaultS
   const paths = instancePaths(root);
   ensureDirectory(root, paths.tooling);
   // Exclusive launch lock: overlapping launches must not overwrite / clear each other's record.
-  acquireLaunchLock(root, paths, system);
+  const me = acquireLaunchLock(root, paths, system);
   try { return await launchLocked(root, env, system, paths); }
-  finally { if (safePath(root, paths.lock, 'file', true)) unlinkSync(paths.lock); }
+  finally { if (lockOwner(root, paths.lock) === me) unlinkSync(paths.lock); } // Never remove another launcher's lock.
 }
 
 async function launchLocked(root, env, system, paths) {

@@ -1,5 +1,5 @@
 // Dedicated-instance tooling with fake process/ps/spawn/CDP. Never starts Obsidian and never signals a real process.
-import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
@@ -225,6 +225,37 @@ describe('dedicated Obsidian process control (fake process table)', () => {
     const system = fakeSystem({ source });
     expect(await launchDedicated(root, {}, system)).toMatchObject({ status: 'LAUNCHED' });
     expect(existsSync(paths.lock)).toBe(false);
+  });
+  it('stale-lock recovery never deletes a competitor\'s fresh lock (rename + verify + restore)', async () => {
+    const { root, paths, source } = setup(); writeFileSync(join(source, 'obsidian-1.14.3.asar'), 'asar');
+    mkdirSync(paths.tooling); writeFileSync(paths.lock, '999999\n');
+    // Competitor B recovers the same dead owner first and writes its own live lock just before we rename.
+    const system = fakeSystem({ source, alive: [777] });
+    system.lockRace = (stage) => { if (stage === 'stale') writeFileSync(paths.lock, '777\n'); };
+    await expect(launchDedicated(root, {}, system)).rejects.toThrow(/pid 777\) holds/);
+    expect(readFileSync(paths.lock, 'utf8')).toBe('777\n');
+    expect(readdirSync(paths.tooling).filter((name) => name.includes('.stale-'))).toEqual([]);
+    expect(system.spawned).toEqual([]);
+  });
+  for (const stage of ['exists', 'stale']) {
+    it(`retries when the lock vanishes at the ${stage} stage (competitor released it)`, async () => {
+      const { root, paths, source } = setup(); writeFileSync(join(source, 'obsidian-1.14.3.asar'), 'asar');
+      mkdirSync(paths.tooling); writeFileSync(paths.lock, '999999\n');
+      const system = fakeSystem({ source }); let fired = false;
+      system.lockRace = (current) => { if (current === stage && !fired) { fired = true; unlinkSync(paths.lock); } };
+      expect(await launchDedicated(root, {}, system)).toMatchObject({ status: 'LAUNCHED' });
+      expect(fired).toBe(true); expect(existsSync(paths.lock)).toBe(false);
+      expect(readdirSync(paths.tooling).filter((name) => name.includes('.stale-'))).toEqual([]);
+    });
+  }
+  it('releases only its own lock when another launcher replaced it meanwhile', async () => {
+    const { root, paths, source } = setup(); writeFileSync(join(source, 'obsidian-1.14.3.asar'), 'asar');
+    const system = fakeSystem({ source });
+    system.waitForDedicatedPage = async ({ version }) => {
+      writeFileSync(paths.lock, '777\n'); return { target: { webSocketDebuggerUrl: 'ws://x' }, version };
+    };
+    await launchDedicated(root, {}, system);
+    expect(readFileSync(paths.lock, 'utf8')).toBe('777\n');
   });
   it('launch reports an asynchronous spawn failure without an unhandled error event', async () => {
     const { root, paths, source } = setup(); writeFileSync(join(source, 'obsidian-1.14.3.asar'), 'asar');

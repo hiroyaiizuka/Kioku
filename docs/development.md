@@ -23,7 +23,7 @@ npm run harness:e2e:smoke -- baseline # 実機担当、専用インスタンス�
 npm run harness:launch     # 専用 profile で test-vault だけを並行起動（利用者の Obsidian は開いたまま、macOS のみ）
 KIOKU_BASELINE_ID="表示されたUUID" npm run harness:e2e:smoke # 実機担当、専用インスタンス + loopback CDP
 npm run harness:quit       # 記録 PID だけを検証して SIGTERM。restart pair は quit → launch → 同じ ID で smoke
-open -n -a Obsidian        # 専用インスタンス実行中に普段の Obsidian を開く（Dock クリックは専用側を前面に出し得る）
+open -n -a Obsidian        # 利用者が手動で実行するだけ（harness/エージェントは実行しない）。専用インスタンス実行中に普段の Obsidian を開く
 npm run hooks:install      # Git 作成後の任意 hook。check を skip しない
 ```
 

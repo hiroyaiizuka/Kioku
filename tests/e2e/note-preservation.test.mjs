@@ -111,6 +111,16 @@ describe('real smoke CLI note preservation using non-UI CDP simulation', () => {
     const report = JSON.parse(result.stdout);
     expect(report.status).toBe('FAIL'); expect(report.steps).toEqual([]);
   });
+  it('fails before any UI operation when the CDP port is not the recorded dedicated instance port', async () => {
+    const { root, expected, id } = setup();
+    mkdirSync(join(root, '.tooling'));
+    writeFileSync(join(root, '.tooling', 'obsidian-instance.json'), JSON.stringify({ schema: 1, pid: 4242,
+      profile: join(root, '.tooling', 'obsidian-profile'), port: 1, startedAt: new Date().toISOString() }));
+    const result = await simulatedSmoke(root, expected, id);
+    expect(result.status).toBe(1); expect(result.stderr).toMatch(/not the recorded dedicated instance port 1/);
+    const report = JSON.parse(result.stdout);
+    expect(report.status).toBe('FAIL'); expect(report.steps).toEqual([]);
+  });
   it('refuses UI PASS without a pre-startup baseline ID', async () => {
     const { root, expected } = setup(); const result = await simulatedSmoke(root, expected, '');
     expect(result.status).toBe(1); expect(result.stderr).toMatch(/KIOKU_BASELINE_ID/);

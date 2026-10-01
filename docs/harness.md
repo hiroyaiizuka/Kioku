@@ -24,7 +24,7 @@ prepare/update/preflight は filesystem の成功であり、Obsidian UI の成�
 
 ## 専用 Obsidian インスタンス（利用者の Obsidian は開いたまま）
 
-利用者の通常の Obsidian は終了させない。Electron の single-instance lock は `--user-data-dir` ごとなので、harness はプロジェクト内の専用 profile で2つ目の Obsidian を並行起動する。アプリ名による終了・起動（`osascript quit`、`pkill`/`killall`、`open -a`）は使わない。
+利用者の通常の Obsidian は終了させない。Electron の single-instance lock は `--user-data-dir` ごとなので、harness はプロジェクト内の専用 profile で2つ目の Obsidian を並行起動する。harness とエージェントは、アプリ名による終了・起動（`osascript quit`、`pkill`/`killall`、`open -a`/`open -n -a`）を一切実行しない。
 
 - `npm run harness:launch`（macOS のみ。他 platform は推測せず拒否）
   - preflight 後、`.tooling/obsidian-profile/`（git 管理外）を containment/symlink/hard link 検査付きで作り、profile の `obsidian.json` に **test-vault だけ**を `open: true` で登録する（vault ID は test-vault path から決定的に導出、`updateDisabled: true` で profile 内の自動更新を止める）。
@@ -41,9 +41,9 @@ prepare/update/preflight は filesystem の成功であり、Obsidian UI の成�
   kill <上で表示され、command line に専用 --user-data-dir を厳密に含む main プロセスの PID（grep 自身の行と --type= 付き helper は除く）>
   ```
 
-- `harness:launch` は起動者 PID を書いた `.tooling/obsidian-launch.lock` で同時実行を拒否する。Ctrl-C などで残った lock は、記録 PID が終了していれば次回の launch が stale として回収する。
+- `harness:launch` は起動者 PID を書いた `.tooling/obsidian-launch.lock` で同時実行を拒否する。Ctrl-C などで残った lock は、記録 PID が終了していれば次回の launch が一意名へ rename してから内容を再確認して回収する（競合 launcher の新しい lock は削除せず戻す）。終了時は自分の PID の lock だけを消す。
 
-専用インスタンスの実行中に普段の Obsidian を開くときは `open -n -a Obsidian` を使う（Dock のクリックは専用インスタンスを前面に出すだけのことがある）。どちらの window かは title の Vault 名で見分ける。CDP port は loopback だけだが、実行中は同じマシンの任意のローカルプロセスが Node 権限で JS を実行できるため、テストしないときは `harness:quit` で止める。
+利用者向けの手動操作の案内: 専用インスタンスの実行中に普段の Obsidian を開くときは、利用者自身が `open -n -a Obsidian` を実行する（harness とエージェントは実行しない。Dock のクリックは専用インスタンスを前面に出すだけのことがある）。どちらの window かは title の Vault 名で見分ける。CDP port は loopback だけだが、実行中は同じマシンの任意のローカルプロセスが Node 権限で JS を実行できるため、テストしないときは `harness:quit` で止める。
 
 test-vault を利用者の通常 Obsidian で開かない（利用者 profile は検査しないため、その場合の書き込みは harness が検出できない）。残存リスク: 同じ bundle ID のため Dock に2つ表示され、`obsidian://` URL がどちらに届くかは macOS 次第。`HOME` を使わない bundle 単位の macOS 状態（`md.obsidian` の NSUserDefaults、Saved Application State、`~/Library/Logs` など）は利用者の Obsidian と共有され得る。CDP port は起動前に空きを確認するが、page と起動 PID の対応までは証明しない（test-vault を開く page であることは確認する）。trust dialog と Escape の挙動は Obsidian 1.14.3 の app code を読んだ結果で、実機証跡で確認するまでは未検証。`harness:quit` は main PID 終了後、同じ profile を持つ helper が消えるまで（signal せず）待つ。login keychain の "Obsidian Safe Storage"（SecretStorage が使う safeStorage）は利用者のインスタンスと共有される（読み取りだけの想定だが未検証）。起動時に `setAsDefaultProtocolClient("obsidian")` が呼ばれるが、同じ bundle なので既定 handler は変わらない想定（未検証）。
 
