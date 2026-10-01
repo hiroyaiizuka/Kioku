@@ -1,6 +1,9 @@
 // Minimal loopback CDP protocol simulation (HTTP /json/list + WebSocket). Never a browser, never native evidence.
+// Runtime.evaluate is answered by really evaluating the expression text (node:vm) against a fake page, returning the
+// same shape as Chrome's Runtime.evaluate(returnByValue): a JSON.stringify(...) expression yields a string.
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
+import { createContext, runInContext } from 'node:vm';
 
 function frame(text) {
   const data = Buffer.from(text);
@@ -9,7 +12,7 @@ function frame(text) {
 }
 
 /**
- * `pages`: [{ path, title }]. `respond(path, message)` returns the CDP `result` object for a request
+ * `pages`: [{ path, title }]. `respond(path, message)` returns (or resolves to) the CDP `result` object for a request
  * (undefined → `{}`). Returns { port, close, url(path) }.
  */
 export async function startCdpServer(pages, respond) {
@@ -35,8 +38,9 @@ export async function startCdpServer(pages, respond) {
         for (let index = 0; index < data.length; index += 1) data[index] ^= mask[index % 4];
         if (opcode === 8) { socket.end(); continue; }
         const message = JSON.parse(data.toString());
-        const result = respond(request.url, message) ?? {};
-        socket.write(frame(JSON.stringify({ id: message.id, result })));
+        Promise.resolve(respond(request.url, message)).then((result) => {
+          if (!socket.destroyed) socket.write(frame(JSON.stringify({ id: message.id, result: result ?? {} })));
+        });
       }
     });
   });
@@ -49,6 +53,47 @@ export async function startCdpServer(pages, respond) {
       await new Promise((resolve) => server.close(resolve));
     },
   };
+}
+
+/** Fake DOM holding only `.modal-container` elements; unknown selectors throw so expression drift is caught. */
+export function fakeDocument(containers) {
+  const element = (classes) => ({
+    classList: classes,
+    querySelector(selector) {
+      if (selector === '.modal') return { classList: [...classes] };
+      if (selector === '.kioku-startup-modal') return classes.includes('kioku-startup-modal') ? {} : null;
+      throw new Error(`Unsupported selector in fake container: ${selector}`);
+    },
+  });
+  return {
+    containers,
+    querySelectorAll(selector) {
+      if (selector === '.modal-container') return containers.map((classes) => element(classes));
+      if (selector === '.modal-container .mod-trust-folder') {
+        return containers.filter((classes) => classes.includes('mod-trust-folder')).map((classes) => element(classes));
+      }
+      throw new Error(`Unsupported selector in fake document: ${selector}`);
+    },
+  };
+}
+
+/** A vm context acting as the page's global object (`window` is the global itself, like a browser). */
+export function fakePage(globals) {
+  const context = createContext({ ...globals });
+  runInContext('globalThis.window = globalThis;', context);
+  return context;
+}
+
+/** Evaluate like Runtime.evaluate({ returnByValue: true, awaitPromise: true }). */
+export async function evaluateInPage(context, expression) {
+  try {
+    let value = runInContext(expression, context);
+    if (value && typeof value.then === 'function') value = await value;
+    // returnByValue serialises by value: a host object would arrive as an object, a JSON string as a string.
+    return { result: { type: typeof value, value: value === undefined ? undefined : JSON.parse(JSON.stringify(value)) } };
+  } catch (error) {
+    return { exceptionDetails: { text: `Uncaught ${error?.message ?? error}` } };
+  }
 }
 
 /** CDP Runtime.evaluate result carrying a JSON-stringified value (as returnByValue does). */

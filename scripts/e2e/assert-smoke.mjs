@@ -30,11 +30,16 @@ export function assertStartup(state, expected) {
   }
 }
 
-/** Every open modal container; Kioku's own modal is recognised only by its scoped class. */
-export const modalInventoryExpression = `JSON.stringify([...document.querySelectorAll('.modal-container')].map((container) => ({
+/**
+ * Every open modal container; Kioku's own modal is recognised only by its scoped class.
+ * `modalInventoryArrayExpression` evaluates to an ARRAY (for embedding inside another JSON.stringify(...));
+ * `modalInventoryExpression` evaluates to its JSON STRING (for CDP.value, which JSON.parses the returned string).
+ */
+export const modalInventoryArrayExpression = `[...document.querySelectorAll('.modal-container')].map((container) => ({
   kioku: Boolean(container.querySelector('.kioku-startup-modal')),
   classes: [...(container.querySelector('.modal')?.classList ?? [])].join(' ')
-})))`;
+}))`;
+export const modalInventoryExpression = `JSON.stringify(${modalInventoryArrayExpression})`;
 
 export function assertNoForeignModal(modals) {
   if (!Array.isArray(modals)) throw new Error('Could not inspect open Obsidian modals.');

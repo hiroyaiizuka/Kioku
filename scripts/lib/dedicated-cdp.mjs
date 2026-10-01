@@ -1,5 +1,5 @@
 // CDP steps of harness:launch for the dedicated instance (loopback only). Unit tests replace these with fakes.
-import { assertNativeTarget, assertNoForeignModal, modalInventoryExpression, nativeTargetExpression,
+import { assertNativeTarget, assertNoForeignModal, modalInventoryArrayExpression, nativeTargetExpression,
   obsidianVersionFromTitle } from '../e2e/assert-smoke.mjs';
 import { CDP, sleep } from './cdp.mjs';
 
@@ -103,7 +103,7 @@ export async function enableCommunityPlugins({ target, timeoutMs = 10000, verify
     let verified;
     while (Date.now() < verifyEnd) {
       verified = await client.value(`JSON.stringify({ enabled: app.plugins.isEnabled(), loaded: Object.keys(app.plugins.plugins).sort(),
-        configured: [...app.plugins.enabledPlugins].sort(), modals: ${modalInventoryExpression} })`);
+        configured: [...app.plugins.enabledPlugins].sort(), modals: ${modalInventoryArrayExpression} })`);
       if (verified.enabled && verified.modals.length === 0 && verified.loaded.join() === 'kioku') break;
       await sleep(100);
     }

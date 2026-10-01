@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { assertNativeTarget, assertNoForeignModal, assertStartup, modalInventoryExpression, nativeTargetExpression,
+import { evaluateInPage, fakeDocument, fakePage } from '../helpers/cdp-server.mjs';
+import { assertNativeTarget, assertNoForeignModal, assertStartup, modalInventoryArrayExpression, modalInventoryExpression, nativeTargetExpression,
   obsidianVersionFromTitle } from '../../scripts/e2e/assert-smoke.mjs';
 
 const expected = { buildId: 'abc', version: '0.0.1' };
@@ -37,5 +38,20 @@ describe('native smoke assertions', () => {
     expect(() => assertNoForeignModal([{ kioku: false, classes: 'modal mod-trust-folder' }])).toThrow(/mod-trust-folder/);
     expect(modalInventoryExpression).toContain("'.modal-container'");
     expect(modalInventoryExpression).toContain('.kioku-startup-modal');
+  });
+  it('expressions evaluate to the shapes CDP callers expect (string for CDP.value, array for embedding)', async () => {
+    const page = fakePage({ document: fakeDocument([['modal', 'kioku-startup-modal'], ['modal', 'mod-trust-folder']]),
+      app: { vault: { adapter: { getBasePath: () => '/kioku/test-vault' } } }, location: { href: 'app://obsidian.md/index.html' },
+      process: { type: 'renderer', versions: { electron: '39.2.1' } } });
+    const inventory = await evaluateInPage(page, modalInventoryExpression);
+    expect(inventory.result.type).toBe('string');
+    expect(JSON.parse(inventory.result.value)).toEqual([{ kioku: true, classes: 'modal kioku-startup-modal' },
+      { kioku: false, classes: 'modal mod-trust-folder' }]);
+    const embedded = await evaluateInPage(page, `JSON.stringify({ modals: ${modalInventoryArrayExpression} })`);
+    expect(Array.isArray(JSON.parse(embedded.result.value).modals)).toBe(true);
+    const target = await evaluateInPage(page, nativeTargetExpression);
+    expect(target.result.type).toBe('string');
+    expect(JSON.parse(target.result.value)).toEqual({ vault: '/kioku/test-vault', url: 'app://obsidian.md/index.html',
+      processType: 'renderer', electron: '39.2.1' });
   });
 });
