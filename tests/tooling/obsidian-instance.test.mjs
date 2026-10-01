@@ -7,8 +7,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, createFixture } from '../helpers/fixture.mjs';
 import { prepareVault } from '../../scripts/lib/harness.mjs';
 import { restrictedModeAction } from '../../scripts/lib/dedicated-cdp.mjs';
-import { assertDedicatedStopped, childEnvironment, compareVersions, defaultAsarSourceDir, instancePaths, launchDedicated, ownsProfile,
-  portInUse, prepareProfile, quitDedicated, readState, resolveExecutable, resolvePort, selectAsar, vaultId,
+import { assertDedicatedStopped, childEnvironment, cliSocketPath, compareVersions, defaultAsarSourceDir, instancePaths, launchDedicated, ownsProfile,
+  portInUse, prepareProfile, quitDedicated, readState, resolveExecutable, resolvePort, resolveQuitTimeout, selectAsar, vaultId,
   writeState } from '../../scripts/lib/obsidian-instance.mjs';
 
 const roots = [];
@@ -171,7 +171,12 @@ describe('dedicated Obsidian process control (fake process table)', () => {
     const system = fakeSystem({ commands: { 4242: `/A/Obsidian --user-data-dir=${paths.profile}` } });
     system.kill = (pid, signal) => { if (signal) system.signals.push([pid, signal]); };
     writeState(root, { pid: 4242, profile: paths.profile, port: 9222, startedAt: '2026-10-02T00:00:00.000Z' });
-    await expect(quitDedicated(root, system, 0)).rejects.toThrow(/did not exit/);
+    await expect(quitDedicated(root, system, 0)).rejects.toThrow(/did not exit.*nothing else was signalled.*system dialog.*KIOKU_QUIT_TIMEOUT_MS/);
+    expect(system.signals).toEqual([[4242, 'SIGTERM']]); // Never escalates to SIGKILL.
+    expect(resolveQuitTimeout({})).toBe(60000); expect(resolveQuitTimeout({ KIOKU_QUIT_TIMEOUT_MS: '120000' })).toBe(120000);
+    for (const value of ['999', '600001', '1e4', '']) {
+      expect(() => resolveQuitTimeout({ KIOKU_QUIT_TIMEOUT_MS: value })).toThrow(/KIOKU_QUIT_TIMEOUT_MS/);
+    }
     expect(readState(root).pid).toBe(4242);
   });
   it('launch refuses when the recorded instance is alive, a profile process exists, or the CDP port is in use', async () => {
@@ -187,9 +192,9 @@ describe('dedicated Obsidian process control (fake process table)', () => {
     for (const system of [running, stray, busy]) expect(system.spawned).toEqual([]);
     expect(existsSync(paths.profile)).toBe(false);
   });
-  it('launch executes the binary with the dedicated profile, loopback CDP and private HOME, and records the PID', async () => {
+  it('launch executes the binary with the dedicated profile and loopback CDP, inherits HOME, and records the PID', async () => {
     const { root, expected, paths, source } = setup(); writeFileSync(join(source, 'obsidian-1.14.3.asar'), 'asar');
-    const system = fakeSystem({ source });
+    const system = fakeSystem({ source }); system.cliSocketPath = join(root, 'no-socket-here');
     const env = { KIOKU_CDP_PORT: '9333', ELECTRON_RUN_AS_NODE: '1', ELECTRON_ENABLE_LOGGING: '1', NODE_OPTIONS: '--inspect',
       HOME: '/Users/me', PATH: '/usr/bin' };
     const result = await launchDedicated(root, env, system);
@@ -197,10 +202,14 @@ describe('dedicated Obsidian process control (fake process table)', () => {
     const [{ executable, args, options }] = system.spawned;
     expect(executable).toBe(system.executable);
     expect(args).toEqual([`--user-data-dir=${paths.profile}`, '--remote-debugging-port=9333', '--remote-debugging-address=127.0.0.1']);
-    expect(options).toMatchObject({ detached: true, cwd: paths.home });
-    expect(options.env).toEqual({ KIOKU_CDP_PORT: '9333', HOME: paths.home, PATH: '/usr/bin' }); // From the passed env only.
-    expect(childEnvironment({ ELECTRON_RUN_AS_NODE: '1', NODE_OPTIONS: 'x', ELECTRONX: 'kept', HOME: '/h' }, '/d'))
-      .toEqual({ ELECTRONX: 'kept', HOME: '/d' });
+    expect(options).toMatchObject({ detached: true, cwd: paths.profile });
+    // HOME inherited unchanged (a private HOME blocked natively on a keychain dialog); only ELECTRON_* / NODE_OPTIONS go.
+    expect(options.env).toEqual({ KIOKU_CDP_PORT: '9333', HOME: '/Users/me', PATH: '/usr/bin' });
+    expect(childEnvironment({ ELECTRON_RUN_AS_NODE: '1', NODE_OPTIONS: 'x', ELECTRONX: 'kept', HOME: '/h' }))
+      .toEqual({ ELECTRONX: 'kept', HOME: '/h' });
+    expect(existsSync(join(paths.tooling, 'obsidian-home'))).toBe(false);
+    expect(result.cliSocket).toMatchObject({ path: join(root, 'no-socket-here'), existedBeforeLaunch: false });
+    expect(cliSocketPath('/Users/u')).toBe('/Users/u/.obsidian-cli.sock');
     expect(readState(root)).toMatchObject({ pid: 4242, profile: paths.profile, port: 9333, startedAt: '2026-10-02T00:00:00.000Z' });
     expect(existsSync(paths.log)).toBe(true);
   });

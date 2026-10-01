@@ -49,7 +49,8 @@ export async function waitForDedicatedPage({ port, vault, version, alive, timeou
     }
     await sleep(250);
   }
-  throw new Error(`Timed out waiting for exactly one dedicated test-vault page (${last}).`);
+  throw new Error(`Timed out waiting for exactly one dedicated test-vault page (${last}). The main thread may be blocked by a `
+    + 'system dialog (e.g. a keychain / SecurityAgent prompt): check the screen.');
 }
 
 const restrictedStateExpression = `JSON.stringify({

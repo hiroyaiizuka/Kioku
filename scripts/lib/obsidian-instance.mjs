@@ -22,9 +22,6 @@ export function instancePaths(root) {
   return {
     tooling,
     profile: join(tooling, 'obsidian-profile'),
-    // HOME for the dedicated process only. Obsidian (macOS) unlinks and re-listens on ~/.obsidian-cli.sock at
-    // startup and unlinks it on quit; a private HOME keeps the user's instance socket untouched.
-    home: join(tooling, 'obsidian-home'),
     state: join(tooling, 'obsidian-instance.json'),
     lock: join(tooling, 'obsidian-launch.lock'),
     log: join(tooling, 'obsidian-instance.log'),
@@ -89,7 +86,7 @@ export function selectAsar(sourceDir, minAppVersion) {
 /** Create the in-project profile, copy (or reuse) the asar, and register only test-vault. */
 export function prepareProfile(root, { vault, sourceDir, minAppVersion, now = Date.now() }) {
   const paths = instancePaths(root);
-  ensureDirectory(root, paths.tooling); ensureDirectory(root, paths.profile); ensureDirectory(root, paths.home);
+  ensureDirectory(root, paths.tooling); ensureDirectory(root, paths.profile);
   const asar = selectAsar(sourceDir, minAppVersion);
   const destination = join(paths.profile, asar.name);
   const reused = safePath(root, destination, 'file', true) && sha256(safeRead(root, destination)) === asar.sha256;
@@ -253,9 +250,13 @@ export async function assertDedicatedStopped(root, ports, system = defaultSystem
   return { dedicatedInstance: 'not-running', checkedPorts: checked, staleRecord: recorded.reason ?? null };
 }
 
-/** Environment for the dedicated child: private HOME; ELECTRON_* (e.g. ELECTRON_RUN_AS_NODE) and NODE_OPTIONS removed. */
-export function childEnvironment(env, home) {
-  const result = { ...env, HOME: home };
+/**
+ * Environment for the dedicated child: inherited unchanged (HOME included) except ELECTRON_* (e.g.
+ * ELECTRON_RUN_AS_NODE) and NODE_OPTIONS. A private HOME is NOT used: natively it hid the login keychain, Electron
+ * safeStorage then raised a blocking SecurityAgent dialog (artifacts/lev-279-native/RECORD.md, Step 3).
+ */
+export function childEnvironment(env) {
+  const result = { ...env };
   for (const key of Object.keys(result)) if (key.startsWith('ELECTRON_') || key === 'NODE_OPTIONS') delete result[key];
   return result;
 }
@@ -371,7 +372,7 @@ async function launchLocked(root, env, system, paths) {
   try {
     safePath(root, paths.log, 'file');
     child = system.spawn(executable, [profileFlag(paths.profile), `--remote-debugging-port=${port}`, '--remote-debugging-address=127.0.0.1'],
-      { detached: true, stdio: ['ignore', log, log], env: childEnvironment(env, paths.home), cwd: paths.home });
+      { detached: true, stdio: ['ignore', log, log], env: childEnvironment(env), cwd: paths.profile });
   } finally { closeSync(log); }
   // Register before the pid check: a failed spawn emits 'error' asynchronously and must not crash the CLI.
   let spawnError = null;
@@ -383,6 +384,10 @@ async function launchLocked(root, env, system, paths) {
   const startedAt = system.now().toISOString();
   writeState(root, { pid: child.pid, profile: paths.profile, port, startedAt, executable, version: profile.version,
     vault: expected.vault, log: paths.log });
+  // Obsidian on macOS unlinks and re-listens on this socket at startup and unlinks it on quit (see docs/harness.md).
+  const socket = system.cliSocketPath ?? cliSocketPath();
+  let socketExisted = false;
+  try { socketExisted = lstatSync(socket).isSocket(); } catch { socketExisted = false; }
 
   let page;
   try {
@@ -397,11 +402,25 @@ async function launchLocked(root, env, system, paths) {
   const restrictedMode = await system.enableCommunityPlugins({ port, target: page.target });
   return { status: 'LAUNCHED', pid: child.pid, version: page.version, port, startedAt, profile: paths.profile,
     vault: expected.vault, asar: { version: profile.version, reused: profile.reused, removed: profile.removed },
-    restrictedMode, log: paths.log };
+    restrictedMode, log: paths.log,
+    cliSocket: { path: socket, existedBeforeLaunch: socketExisted,
+      note: 'Taken over by the dedicated instance while it runs and removed on harness:quit; another Obsidian\'s CLI needs that Obsidian restarted.' } };
 }
 
 /** Terminate only the recorded PID, after proving its command line carries the dedicated profile flag. */
-export async function quitDedicated(root, system = defaultSystem, timeoutMs = 20000) {
+export const defaultQuitTimeoutMs = 60000;
+export function resolveQuitTimeout(env = process.env) {
+  const raw = env.KIOKU_QUIT_TIMEOUT_MS ?? String(defaultQuitTimeoutMs);
+  if (!/^\d+$/u.test(raw) || Number(raw) < 1000 || Number(raw) > 600000) {
+    throw new Error('KIOKU_QUIT_TIMEOUT_MS must be an integer between 1000 and 600000.');
+  }
+  return Number(raw);
+}
+
+/** Where macOS Obsidian 1.14.3 puts its CLI socket: join(os.homedir(), '.obsidian-cli.sock') (XDG is ignored on darwin). */
+export const cliSocketPath = (home = userInfo().homedir) => join(home, '.obsidian-cli.sock');
+
+export async function quitDedicated(root, system = defaultSystem, timeoutMs = defaultQuitTimeoutMs) {
   const paths = instancePaths(root);
   const recorded = recordedInstance(root, system);
   if (!recorded.running) {
@@ -422,7 +441,11 @@ export async function quitDedicated(root, system = defaultSystem, timeoutMs = 20
   system.kill(pid, 'SIGTERM');
   const end = Date.now() + timeoutMs;
   while (isAlive(pid, system)) {
-    if (Date.now() > end) throw new Error(`Dedicated Obsidian (pid ${pid}) did not exit within ${timeoutMs} ms after SIGTERM; state kept.`);
+    if (Date.now() > end) {
+      throw new Error(`Dedicated Obsidian (pid ${pid}) did not exit within ${timeoutMs} ms after SIGTERM; state kept, nothing else was signalled. `
+        + 'Its main thread may be blocked by a system dialog (e.g. a keychain prompt): check the screen, then rerun npm run harness:quit '
+        + '(KIOKU_QUIT_TIMEOUT_MS to wait longer). A manual SIGKILL of this verified PID is an operator decision; see docs/harness.md.');
+    }
     await system.sleep(100);
   }
   // Electron helpers (GPU/renderer) can outlive the main PID briefly; wait (never signal them) so that an

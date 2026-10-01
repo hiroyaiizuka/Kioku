@@ -44,7 +44,7 @@ describe('waitForDedicatedPage (CDP simulation)', () => {
   it('fails when the launched process exits, and times out while the layout is not ready', async () => {
     const server = await pageServer([{ path: '/main', title: 'test-vault - Obsidian 1.14.3', state: nativePage({ layoutReady: false }) }]);
     await expect(wait(server.port, { alive: () => false })).rejects.toThrow(/exited before/);
-    await expect(wait(server.port, { timeoutMs: 600 })).rejects.toThrow(/Timed out/);
+    await expect(wait(server.port, { timeoutMs: 600 })).rejects.toThrow(/Timed out.*blocked by a system dialog.*check the screen/s);
   });
 });
 
