@@ -152,12 +152,68 @@ export async function confirmAdoption(app: App, file: TFile, cardId: string, sig
   timing: ConfirmTiming = CONFIRM_TIMING): Promise<Confirmation> {
   const view = findEditingView(app, file);
   if (view) await view.save().catch(() => undefined); // A failed flush shows up as a missing ID.
+  let seen = false;
   for (let elapsed = 0; ; elapsed += timing.intervalMs) {
     if (signal.aborted) return 'cancelled';
     const present = await idOnDisk(app, file, cardId);
     if (signal.aborted) return 'cancelled';
     if (present && elapsed >= timing.settleMs) return 'confirmed';
+    // Seen on disk and then gone: another view saved over it. No need to wait for the deadline.
+    if (seen && !present) return 'lost';
+    seen ||= present;
     if (elapsed >= timing.deadlineMs) return 'lost';
     if (!(await sleep(timing.intervalMs, signal))) return 'cancelled';
   }
+}
+
+export interface QuietTiming {
+  readonly intervalMs: number;
+  /** The file must see no `modify` event for this long before the retry. */
+  readonly quietMs: number;
+  /** Give up (honest failure) when the file never becomes quiet, e.g. the user keeps typing elsewhere. */
+  readonly quietDeadlineMs: number;
+}
+
+export const QUIET_TIMING: QuietTiming = { intervalMs: 250, quietMs: 1000, quietDeadlineMs: 10000 };
+
+/** Resolves true once `file` had no `modify` event for `quietMs`; false on timeout or abort. */
+async function waitUntilQuiet(app: App, file: TFile, signal: AbortSignal, timing: QuietTiming): Promise<boolean> {
+  let touched = false;
+  const ref = app.vault.on('modify', (changed) => {
+    if (changed.path === file.path) touched = true;
+  });
+  try {
+    let quiet = 0;
+    for (let elapsed = 0; elapsed < timing.quietDeadlineMs; elapsed += timing.intervalMs) {
+      if (!(await sleep(timing.intervalMs, signal))) return false;
+      quiet = touched ? 0 : quiet + timing.intervalMs;
+      touched = false;
+      if (quiet >= timing.quietMs) return true;
+    }
+    return false;
+  } finally {
+    app.vault.offref(ref);
+  }
+}
+
+/**
+ * The single recovery attempt after a confirmed loss: another view (typically a hover popover
+ * that was closed with unsaved edits) saved a stale buffer over our write. Once that save has
+ * happened the other view's buffer is clean, and a clean view reloads later external changes
+ * instead of saving over them, so one retry converges. The retry goes through `adoptCandidate`
+ * again, i.e. the Canvas guard, the editing-view choice and the original-text verification on
+ * the current content: it never writes when the original changed and never inserts twice.
+ * Returns `null` when the file does not become quiet (honest failure), when the first write is
+ * still only in an editing view's buffer (it did not persist; writing again would not help), or
+ * when the popup closed. Returns `previous` unchanged (no write) when its ID is on disk after all,
+ * so the caller confirms it again instead of inserting a second ID.
+ */
+export async function recoverAdoption(app: App, file: TFile, previous: AdoptResult & { readonly ok: true },
+  recorded: RecordedCandidate, edited: CardText, signal: AbortSignal,
+  timing: QuietTiming = QUIET_TIMING): Promise<AdoptResult | null> {
+  if (!(await waitUntilQuiet(app, file, signal, timing)) || signal.aborted) return null;
+  if (await idOnDisk(app, file, previous.cardId)) return previous;
+  const view = findEditingView(app, file);
+  if (view && extractCandidates(view.editor.getValue()).some((candidate) => candidate.cardId === previous.cardId)) return null;
+  return adoptCandidate(app, file, recorded, edited);
 }

@@ -93,9 +93,12 @@ export async function compilePlugin(source, notices) {
 /** An app whose note I/O is observable: views hold editors, closed files live in `files`. */
 export function createApp({ files = {}, views = [], active = null, canvases = [] } = {}) {
   const calls = [];
-  for (const view of views) view.onSave = (text) => { calls.push(`save:${view.file.path}`); files[view.file.path] = text; };
+  const modifyListeners = new Set();
+  /** Writes a file the way another view or Obsidian would, firing the public `modify` event. */
+  const modify = (path, text) => { files[path] = text; for (const listener of [...modifyListeners]) listener({ path }); };
+  for (const view of views) view.onSave = (text) => { calls.push(`save:${view.file.path}`); modify(view.file.path, text); };
   const app = {
-    calls, files,
+    calls, files, modify, modifyListeners,
     workspace: {
       getActiveViewOfType(type) { calls.push('workspace.getActiveViewOfType'); return active instanceof type ? active : null; },
       getLeavesOfType(type) {
@@ -108,7 +111,14 @@ export function createApp({ files = {}, views = [], active = null, canvases = []
     vault: {
       async read(file) { calls.push(`vault.read:${file.path}`); return files[file.path]; },
       async cachedRead(file) { calls.push(`vault.cachedRead:${file.path}`); return files[file.path]; },
-      async process(file, fn) { calls.push(`vault.process:${file.path}`); files[file.path] = fn(files[file.path]); return files[file.path]; },
+      async process(file, fn) {
+        calls.push(`vault.process:${file.path}`);
+        const before = files[file.path]; const after = fn(before);
+        if (after !== before) modify(file.path, after);
+        return files[file.path];
+      },
+      on(name, callback) { if (name === 'modify') modifyListeners.add(callback); return { name, callback }; },
+      offref(ref) { modifyListeners.delete(ref.callback); },
     },
   };
   return app;

@@ -360,32 +360,79 @@ describe('post-write disk confirmation', () => {
     }
   });
 
-  it('reports a lost write (overwritten by another view) and allows a clean re-adoption', async () => {
+  const LOST = 'Kioku：採用を確認できませんでした。保存後に ID が見つかりません。別の画面の保存で上書きされた可能性があります。もう一度抽出してください。';
+  const processCalls = (app) => app.calls.filter((call) => call.startsWith('vault.process')).length;
+
+  it('recovers once when a closed hover popover saves its stale buffer over the write (re-verified, one ID)', async () => {
     const { app, plugin, file } = openNote(NOTE, { mode: 'preview' });
     extractCommand(plugin).checkCallback(false); await flush();
     card(0).querySelector('.kioku-candidate-adopt').click();
     await vi.advanceTimersByTimeAsync(300);
     expect(app.files[file.path]).toMatch(/\^kioku-\w{10}/);
-    // A Canvas node (or hover editor) saves its stale buffer ~2 s later.
-    app.files[file.path] = `${NOTE}canvasTyped`;
+    // The popover's pending save writes its stale (pre-adoption) buffer plus the user's typing.
+    app.modify(file.path, `${NOTE}hoverTyped`);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(card(0).querySelector('.kioku-candidate-message').textContent).toContain('もう一度保存します');
+    expect(notices).toEqual([]);
     await settle();
-    const lost = '保存後に ID が見つかりません。別の画面の保存で上書きされた可能性があります。もう一度抽出してください。';
-    expect(notices).toEqual([`Kioku：採用を確認できませんでした。${lost}`]);
-    expect(card(0).querySelector('.kioku-candidate-message').textContent).toBe(`採用を確認できませんでした：${lost}`);
-    expect(card(0).querySelector('.kioku-candidate-meta').textContent).toBe('3 行目 · 未採用');
-    expect(card(0).querySelector('.kioku-candidate-adopt').disabled).toBe(false);
-    await click(card(0).querySelector('.kioku-candidate-adopt'));
-    expect(notices[1]).toMatch(/^Kioku：採用しました/);
-    expect(app.files[file.path].match(/\^kioku-/g)).toHaveLength(1);
-    expect(app.files[file.path].replace(/ \^kioku-\w{10}/, '').replace('\n\n', '\n')).toBe(`${NOTE}canvasTyped`.replace('\n\n', '\n'));
+    expect(processCalls(app)).toBe(2);
+    expect(notices).toHaveLength(1); expect(notices[0]).toMatch(/^Kioku：採用しました（kioku-\w{10}）。$/);
+    const final = app.files[file.path];
+    expect(final.match(/\^kioku-/g)).toHaveLength(1);
+    expect(final).toContain(notices[0].match(/kioku-\w{10}/)[0]);
+    expect(final.endsWith('hoverTyped')).toBe(true);
+    expect(card(0).querySelector('.kioku-candidate-meta').textContent).toMatch(/^3 行目 · 採用済み · kioku-/);
   });
 
-  it('reports a lost write when the editor flush never reaches the disk', async () => {
-    const { app, plugin, view } = openNote(NOTE);
+  it('gives up honestly after one retry when the other view keeps saving over the note', async () => {
+    const { app, plugin, file } = openNote(NOTE, { mode: 'preview' });
+    extractCommand(plugin).checkCallback(false); await flush();
+    // Every Kioku write is overwritten again shortly afterwards.
+    app.vault.on('modify', () => {
+      if (/\^kioku-/.test(app.files[file.path])) globalThis.setTimeout(() => app.modify(file.path, `${NOTE}typing`), 100);
+    });
+    card(0).querySelector('.kioku-candidate-adopt').click();
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(processCalls(app)).toBe(2);
+    expect(notices).toEqual([LOST]);
+    expect(card(0).querySelector('.kioku-candidate-meta').textContent).toBe('3 行目 · 未採用');
+    expect(app.files[file.path]).not.toMatch(/\^kioku-/);
+  });
+
+  it('does not retry when the stale save changed the original text (re-verification)', async () => {
+    const { app, plugin, file } = openNote(NOTE, { mode: 'preview' });
+    extractCommand(plugin).checkCallback(false); await flush();
+    card(0).querySelector('.kioku-candidate-adopt').click();
+    await vi.advanceTimersByTimeAsync(300);
+    const changed = NOTE.replace('A: 光で糖を作る反応', 'A: ポップオーバーで書き換え');
+    app.modify(file.path, changed);
+    await settle();
+    expect(processCalls(app)).toBe(2); // the retry ran through Vault.process but wrote nothing
+    expect(app.files[file.path]).toBe(changed);
+    expect(notices).toEqual(['Kioku：保存しませんでした。原文が抽出後に変更されています。もう一度抽出してください。']);
+  });
+
+  it('gives up when the note never becomes quiet before the retry', async () => {
+    const { app, plugin, file } = openNote(NOTE, { mode: 'preview' });
+    extractCommand(plugin).checkCallback(false); await flush();
+    card(0).querySelector('.kioku-candidate-adopt').click();
+    await vi.advanceTimersByTimeAsync(300);
+    app.modify(file.path, `${NOTE}t`);
+    for (let i = 0; i < 60; i += 1) { await vi.advanceTimersByTimeAsync(200); app.modify(file.path, `${NOTE}t${i}`); }
+    await settle();
+    expect(processCalls(app)).toBe(1);
+    expect(notices).toEqual([LOST]);
+    expect(app.modifyListeners.size).toBe(0);
+  });
+
+  it('reports a lost write when the editor flush never reaches the disk (no second insert into the buffer)', async () => {
+    const { app, plugin, view, editor } = openNote(NOTE);
     view.save = async () => {}; // the editor never persists
     extractCommand(plugin).checkCallback(false);
-    await click(card(0).querySelector('.kioku-candidate-adopt'));
-    expect(notices[0]).toMatch(/^Kioku：採用を確認できませんでした。/);
+    card(0).querySelector('.kioku-candidate-adopt').click();
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(notices).toEqual([LOST]);
+    expect(editor.transactions).toHaveLength(1);
     expect(app.calls.some((call) => call.startsWith('vault.process'))).toBe(false);
   });
 
@@ -412,16 +459,18 @@ describe('post-write disk confirmation', () => {
     expect(notices).toHaveLength(1); expect(notices[0]).toMatch(/^Kioku：採用しました/);
   });
 
-  it('treats a throwing confirmation as a lost write, never as success', async () => {
+  it('never reports success when confirmation (and recovery) throw', async () => {
     const { app, plugin } = openNote(NOTE, { mode: 'preview' });
     extractCommand(plugin).checkCallback(false); await flush();
     const leaves = app.workspace.getLeavesOfType;
     let calls = 0;
-    // The 3rd workspace query is the one inside confirmAdoption (after the canvas guard and the write path choice).
-    app.workspace.getLeavesOfType = (type) => { calls += 1; if (calls === 3) throw new Error('boom'); return leaves(type); };
-    await click(card(0).querySelector('.kioku-candidate-adopt'));
+    // From the 3rd workspace query on (inside confirmAdoption, after the guard and the write) everything throws.
+    app.workspace.getLeavesOfType = (type) => { calls += 1; if (calls >= 3) throw new Error('boom'); return leaves(type); };
+    card(0).querySelector('.kioku-candidate-adopt').click();
+    await vi.advanceTimersByTimeAsync(20000);
     expect(calls).toBeGreaterThanOrEqual(3);
-    expect(notices).toEqual(['Kioku：採用を確認できませんでした。保存後に ID が見つかりません。別の画面の保存で上書きされた可能性があります。もう一度抽出してください。']);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).not.toContain('採用しました');
     expect(card(0).querySelector('.kioku-candidate-meta').textContent).toBe('3 行目 · 未採用');
   });
 
@@ -431,9 +480,9 @@ describe('post-write disk confirmation', () => {
     card(0).querySelector('.kioku-candidate-adopt').click();
     await vi.advanceTimersByTimeAsync(300);
     const id = app.files[file.path].match(/\^(kioku-\w{10})/)[1];
-    app.files[file.path] += `\nQ: copy\nA: copy ^${id}\n`;
-    await settle();
-    expect(notices[0]).toMatch(/^Kioku：採用を確認できませんでした。/);
+    app.modify(file.path, `${app.files[file.path]}\nQ: copy\nA: copy ^${id}\n`);
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(notices).toEqual(['Kioku：保存しませんでした。この問い・答えは既に採用済みです。']);
   });
 });
 

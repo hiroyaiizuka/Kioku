@@ -12,6 +12,12 @@ export interface CandidateModalOptions {
   readonly adopt: (recorded: RecordedCandidate, edited: CardText) => Promise<AdoptResult>;
   /** Waits until the adopted ID is confirmed on disk; aborted when the popup closes. */
   readonly confirm: (cardId: string, signal: AbortSignal) => Promise<Confirmation>;
+  /**
+   * The one recovery attempt after a lost write: waits until the note is quiet, then re-verifies
+   * the original and writes again. `null` = not quiet in time, or the popup closed.
+   */
+  readonly recover: (previous: AdoptResult & { readonly ok: true }, recorded: RecordedCandidate, edited: CardText,
+    signal: AbortSignal) => Promise<AdoptResult | null>;
   readonly onClosed?: () => void;
 }
 
@@ -191,29 +197,49 @@ export class CandidateModal extends Modal {
     entry.message = '保存しています…';
     this.render();
     const edited = entry.draft;
+    const recorded = { start: entry.start, sourceText: entry.candidate.sourceText };
+    const { signal } = this.lifetime;
     let result: AdoptResult;
     try {
-      result = await this.options.adopt({ start: entry.start, sourceText: entry.candidate.sourceText }, edited);
+      result = await this.options.adopt(recorded, edited);
     } catch (error) {
       result = { ok: false, reason: errorMessage(error) };
     }
-    if (!result.ok) {
-      this.fail(entry, refusalInline(result.reason), refusalNotice(result.reason));
-      return;
-    }
-    entry.state = 'confirming';
-    entry.message = '保存を確認しています…';
-    this.render();
-    let confirmation: Confirmation;
-    try {
-      confirmation = await this.options.confirm(result.cardId, this.lifetime.signal);
-    } catch {
-      confirmation = 'lost';
-    }
-    if (confirmation === 'cancelled') return;
-    if (confirmation === 'lost') {
-      this.fail(entry, lostInline(REASONS.lostAfterWrite), lostNotice(REASONS.lostAfterWrite));
-      return;
+    // At most one recovery: a second loss means another view keeps saving over the note.
+    for (let attempt = 0; ; attempt += 1) {
+      if (!result.ok) {
+        this.fail(entry, refusalInline(result.reason), refusalNotice(result.reason));
+        return;
+      }
+      entry.state = 'confirming';
+      entry.message = '保存を確認しています…';
+      this.render();
+      let confirmation: Confirmation;
+      try {
+        confirmation = await this.options.confirm(result.cardId, signal);
+      } catch {
+        confirmation = 'lost';
+      }
+      if (confirmation === 'cancelled') return;
+      if (confirmation === 'confirmed') break;
+      if (attempt >= 1) {
+        this.fail(entry, lostInline(REASONS.lostAfterWrite), lostNotice(REASONS.lostAfterWrite));
+        return;
+      }
+      entry.message = '別の画面の保存と重なりました。ノートが落ち着くのを待って、もう一度保存します…';
+      this.render();
+      let retried: AdoptResult | null;
+      try {
+        retried = await this.options.recover(result, recorded, edited, signal);
+      } catch (error) {
+        retried = { ok: false, reason: errorMessage(error) };
+      }
+      if (signal.aborted) return;
+      if (!retried) {
+        this.fail(entry, lostInline(REASONS.lostAfterWrite), lostNotice(REASONS.lostAfterWrite));
+        return;
+      }
+      result = retried;
     }
     entry.state = 'adopted';
     entry.cardId = result.cardId;
