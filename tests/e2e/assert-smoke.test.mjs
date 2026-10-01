@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assertNativeTarget, assertStartup } from '../../scripts/e2e/assert-smoke.mjs';
+import { assertNativeTarget, assertStartup, nativeTargetExpression } from '../../scripts/e2e/assert-smoke.mjs';
 
 const expected = { buildId: 'abc', version: '0.0.1' };
 const visible = { count: 1, text: 'Kioku M0 未実装', buildId: 'abc', version: '0.0.1',
@@ -13,8 +13,14 @@ describe('native smoke assertions', () => {
     expect(() => assertStartup(visible, expected)).not.toThrow();
   });
   it('accepts only native Obsidian target information for the exact dedicated Vault', () => {
-    expect(() => assertNativeTarget({ version: '1.8.7', vault: '/kioku/test-vault' }, '/kioku/test-vault')).not.toThrow();
-    expect(() => assertNativeTarget({ version: '', vault: '/kioku/test-vault' }, '/kioku/test-vault')).toThrow();
-    expect(() => assertNativeTarget({ version: '1.8.7', vault: '/personal' }, '/kioku/test-vault')).toThrow();
+    const native = { version: '1.13.7', vault: '/kioku/test-vault', url: 'app://obsidian.md/index.html',
+      processType: 'renderer', electron: '43.3.0' };
+    expect(() => assertNativeTarget(native, '/kioku/test-vault')).not.toThrow();
+    for (const state of [{ ...native, version: '' }, { ...native, vault: '/personal' }, { ...native, url: 'https://example.com' },
+      { ...native, processType: '' }, { ...native, electron: '' }]) {
+      expect(() => assertNativeTarget(state, '/kioku/test-vault')).toThrow();
+    }
+    expect(nativeTargetExpression).toContain('versions?.electron');
+    expect(nativeTargetExpression).not.toContain("require?.('obsidian')");
   });
 });

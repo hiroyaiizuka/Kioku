@@ -1,5 +1,14 @@
+export const nativeTargetExpression = `JSON.stringify({
+  vault: window.app?.vault?.adapter?.getBasePath?.() ?? '',
+  url: location.href,
+  processType: window.process?.type ?? '',
+  electron: window.process?.versions?.electron ?? ''
+})`;
+
 export function assertNativeTarget(state, expectedVault) {
-  if (!state || state.version === '' || typeof state.version !== 'string' || state.vault !== expectedVault) {
+  if (!state || !/^\d+\.\d+\.\d+$/u.test(state.version) || state.vault !== expectedVault
+      || state.url !== 'app://obsidian.md/index.html' || state.processType !== 'renderer'
+      || !/^\d+\.\d+\.\d+$/u.test(state.electron)) {
     throw new Error('Not the native Obsidian page for the dedicated test-vault.');
   }
 }

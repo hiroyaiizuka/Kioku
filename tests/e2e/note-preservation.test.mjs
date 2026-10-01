@@ -21,7 +21,8 @@ async function simulatedSmoke(root, expected, baselineId, mutateAt, baselineMode
   const sockets = new Set();
   const server = createServer((_req, res) => {
     res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify([{ type: 'page', webSocketDebuggerUrl: `ws://127.0.0.1:${server.address().port}/probe` }]));
+    res.end(JSON.stringify([{ type: 'page', title: 'test-vault - Obsidian 1.13.7',
+      webSocketDebuggerUrl: `ws://127.0.0.1:${server.address().port}/probe` }]));
   });
   server.on('upgrade', (req, socket) => {
     sockets.add(socket); socket.on('close', () => sockets.delete(socket));
@@ -41,7 +42,8 @@ async function simulatedSmoke(root, expected, baselineId, mutateAt, baselineMode
         const message = JSON.parse(data.toString()); let result = {};
         if (message.method === 'Runtime.evaluate') {
           const expression = message.params.expression; let value;
-          if (expression.includes('apiVersion')) value = { version: '1.8.7', vault: expected.vault };
+          if (expression.includes('versions?.electron')) value = { version: '1.13.7', vault: expected.vault,
+            url: 'app://obsidian.md/index.html', processType: 'renderer', electron: '43.3.0' };
           else if (expression.includes('getBoundingClientRect')) value = { count: 1, text: 'Kioku M0 未実装', ...expected,
             x: 300, y: 200, width: 400, height: 300, viewportWidth: 1000, viewportHeight: 700 };
           else if (expression.includes('?.click()')) {
