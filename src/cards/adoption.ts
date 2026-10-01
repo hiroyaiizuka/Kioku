@@ -38,7 +38,7 @@ export function validateEdit(card: CardText): string | null {
   const parsed = findBlocks(lines, lines.map(() => null));
   const only = parsed[0];
   if (parsed.length !== 1 || !only || only.question !== card.question || only.answer !== card.answer) {
-    return '空行・見出し・行頭の Q:/A: などを含む編集は保存できません。';
+    return '空行・見出し・行頭の問い/答えの印（Q: や A: など）を含む編集は保存できません。';
   }
   return null;
 }
@@ -56,7 +56,7 @@ function locate(candidates: readonly Candidate[], recorded: RecordedCandidate): 
       ? '同じ原文が複数あり、位置を特定できません（外部で変更された可能性があります）。'
       : '原文が抽出後に変更されたため保存しませんでした。もう一度抽出してください。';
   }
-  if (target.status === 'adopted' || target.status === 'duplicate-id') return 'この Q/A は既に採用済みです。';
+  if (target.status === 'adopted' || target.status === 'duplicate-id') return 'この問い・答えは既に採用済みです。';
   if (target.status === 'foreign-block-id') return '既存の block ID があるため採用できません。';
   return target;
 }
@@ -76,7 +76,8 @@ export function planAdoption(text: string, recorded: RecordedCandidate, edited: 
     if (invalid) return { ok: false, reason: invalid };
   }
   const cardId = generateCardId(existingCardIds(text), random);
-  const eol = detectEol(text);
+  // Match the block's own line break (notes can mix CRLF and LF); at EOF fall back to the note's.
+  const eol = text.slice(target.end).match(/^(?:\r\n|\r|\n)/)?.[0] ?? detectEol(text);
   let insert = ` ^${cardId}`;
   if (changed) insert += `${eol}${eol}${EDIT_RECORD_PREFIX}${cardId}${eol}${serializeCard(edit, eol)}${eol}%%`;
   // The block (or its edit record) must end a paragraph so `^kioku-…` is a valid block ID:

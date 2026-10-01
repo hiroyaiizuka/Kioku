@@ -93,6 +93,18 @@ describe('planAdoption: verify then insert once, never rewriting the original', 
       expect(plan.next.slice(0, plan.offset) + plan.next.slice(plan.offset + plan.insert.length)).toBe(note);
       expect(extractCandidates(plan.next)[0]).toMatchObject({ status: 'adopted', needsBlankLine: false });
     }
+    const list = '- Q: a\n- A: b\n- Q: c\n- A: d';
+    const listPlan = planAdoption(list, record(extractCandidates(list)[0]), { question: 'a', answer: 'b' }, ID_A);
+    expect(listPlan.next).toBe('- Q: a\n- A: b ^kioku-0123456789\n- Q: c\n- A: d');
+    const listThenText = '- Q: a\n- A: b\nQ: c\nA: d';
+    expect(planAdoption(listThenText, record(extractCandidates(listThenText)[0]), { question: 'a', answer: 'b' }, ID_A).next)
+      .toBe('- Q: a\n- A: b ^kioku-0123456789\n\nQ: c\nA: d');
+    const mixed = 'x\nQ: a\r\nA: b\r\nQ: c\nA: d';
+    const mixedPlan = planAdoption(mixed, record(extractCandidates(mixed)[0]), { question: 'a2', answer: 'b' }, ID_A);
+    expect(mixedPlan.next).toBe('x\nQ: a\r\nA: b ^kioku-0123456789\r\n\r\n%%kioku-edit:kioku-0123456789\r\nQ: a2\r\nA: b\r\n%%\r\n\r\nQ: c\nA: d');
+    const mixedUnedited = 'x\nQ: a\r\nA: b\r\nQ: c';
+    expect(planAdoption(mixedUnedited, record(extractCandidates(mixedUnedited)[0]), { question: 'a', answer: 'b' }, ID_A).next)
+      .toBe('x\nQ: a\r\nA: b ^kioku-0123456789\r\n\r\nQ: c');
     const crlf = 'Q: a\r\nA: b\r\nQ: c\r\nA: d';
     const edited = planAdoption(crlf, record(extractCandidates(crlf)[0]), { question: 'a2', answer: 'b' }, ID_A);
     expect(edited.next).toBe('Q: a\r\nA: b ^kioku-0123456789\r\n\r\n%%kioku-edit:kioku-0123456789\r\nQ: a2\r\nA: b\r\n%%\r\n\r\nQ: c\r\nA: d');

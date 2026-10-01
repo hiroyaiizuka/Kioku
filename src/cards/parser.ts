@@ -8,6 +8,7 @@ const QUESTION = /^\uFEFF?(?:[-*+][ \t]+)?(?:Q|Ｑ|問)[ \t]*[:：][ \t]*(.*)$/u
 const ANSWER = /^(?:[-*+][ \t]+)?(?:A|Ａ|答)[ \t]*[:：][ \t]*(.*)$/u;
 const HEADING = /^#{1,6}(?:[ \t]|$)/;
 const RULE = /^\s*(?:-{3,}|\*{3,}|_{3,}|={3,})\s*$/;
+const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])[ \t]+/;
 const TRAILING_BLOCK_ID = /(^|[ \t]+)\^([A-Za-z0-9-]+)[ \t]*$/;
 const EDIT_HEADER = /^%%kioku-edit:([A-Za-z0-9-]+)[ \t]*$/;
 
@@ -29,8 +30,8 @@ export interface RawBlock extends CardText {
   /** Trailing Obsidian block ID of the last line, without `^`. */
   readonly blockId: string | null;
   /**
-   * The line after the block is non-blank text (next Q, second A, `---`, excluded text…).
-   * Adoption then inserts one blank line so the block ID ends a paragraph.
+   * The line after the block is non-blank text (next Q, second A, `---`, excluded text…) and
+   * not a list item continuing a list. Adoption then inserts one blank line so the block ID ends a block.
    */
   readonly needsBlankLine: boolean;
 }
@@ -78,8 +79,12 @@ export function findBlocks(lines: readonly Line[], kinds: readonly ExclusionKind
       }
     }
     const after = lines[next];
+    const last = lines[next - 1];
+    // A list item followed by another list item is already its own block; a blank line there
+    // would only turn a tight list into a loose one.
+    const listContinues = last !== undefined && after !== undefined && LIST_ITEM.test(last.text) && LIST_ITEM.test(after.text);
     const block = answerLine < 0 ? null
-      : readBlock(lines, index, answerLine, next - 1, after !== undefined && !isBlank(after.text));
+      : readBlock(lines, index, answerLine, next - 1, after !== undefined && !isBlank(after.text) && !listContinues);
     if (block) blocks.push(block);
     index = next;
   }

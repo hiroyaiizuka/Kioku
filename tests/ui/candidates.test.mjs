@@ -199,6 +199,15 @@ describe('adoption through the open editor', () => {
     expect(editor.getValue()).toMatch(/^Q: 一つ目\nA: 答え1 \^kioku-\w{10}\n\nQ: 二つ目\nA: 答え2 \^kioku-\w{10}$/);
   });
 
+  it('does not announce or insert a blank line inside a tight list', async () => {
+    const note = '- Q: 一つ目\n- A: 答え1\n- Q: 二つ目\n- A: 答え2';
+    const { plugin, editor } = openNote(note);
+    extractCommand(plugin).checkCallback(false);
+    expect(document.querySelector('.kioku-candidate-note')).toBeNull();
+    await click(card(0).querySelector('.kioku-candidate-adopt'));
+    expect(editor.getValue()).toMatch(/^- Q: 一つ目\n- A: 答え1 \^kioku-\w{10}\n- Q: 二つ目\n- A: 答え2$/);
+  });
+
   it('shows duplicate-ID and foreign-block-ID blocks as non-adoptable, not as adopted cards', () => {
     const note = 'Q: a\nA: b ^kioku-abcdefghij\n\nQ: a\nA: b ^kioku-abcdefghij\n\nQ: c\nA: d ^mine';
     const { plugin } = openNote(note);

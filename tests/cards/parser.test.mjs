@@ -153,6 +153,11 @@ describe('exclusions keep code, comments, frontmatter and Excalidraw data out', 
     expect(pick(extractCandidates(note)).map((item) => item.question)).toEqual(['本物1', '本物2 $$x$$']);
   });
 
+  it('keeps a comment open when a line closes one HTML comment and opens another', () => {
+    const note = ['<!-- a --> b <!-- c', 'Q: in comment', 'A: no', '-->', 'Q: 本物', 'A: はい'].join('\n');
+    expect(extractCandidates(note).map((item) => item.question)).toEqual(['本物']);
+  });
+
   it('handles a UTF-8 BOM before frontmatter or a first-line question', () => {
     expect(extractCandidates('\uFEFF---\nQ: in fm\nA: no\n---\nQ: 本物\nA: はい').map((item) => item.question)).toEqual(['本物']);
     const [first] = extractCandidates('\uFEFFQ: 先頭\nA: はい');
@@ -225,6 +230,9 @@ describe('adoption markers and duplicate detection', () => {
 
   it('flags blocks that are directly followed by text as needing a blank line', () => {
     expect(extractCandidates('Q: a\nA: b\nQ: c\nA: d\n\nQ: e\nA: f').map((item) => item.needsBlankLine)).toEqual([true, false, false]);
+    expect(extractCandidates('- Q: a\n- A: b\n- Q: c\n- A: d').map((item) => item.needsBlankLine)).toEqual([false, false]);
+    expect(extractCandidates('Q: a\nA:\n1. x\n2. y\n- Q: c\n- A: d').map((item) => item.needsBlankLine)).toEqual([false, false]);
+    expect(extractCandidates('- Q: a\n- A: b\nQ: c\nA: d').map((item) => item.needsBlankLine)).toEqual([true, false]);
   });
 
   it('marks copied kioku IDs as duplicate and foreign block IDs as not adoptable', () => {
