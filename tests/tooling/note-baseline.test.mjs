@@ -6,6 +6,7 @@ import { prepareVault } from '../../scripts/lib/harness.mjs';
 import { assertNotesUnchanged, captureNoteBaseline, loadNoteBaseline, snapshotNotes } from '../../scripts/lib/note-baseline.mjs';
 
 const roots = [];
+const stopped = { dedicatedInstance: 'not-running', checkedPorts: [9222] };
 const setup = () => { const root = createFixture(); roots.push(root); return { root, expected: prepareVault(root) }; };
 afterEach(() => { while (roots.length) cleanup(roots.pop()); });
 
@@ -15,8 +16,9 @@ describe('pre-startup note baseline filesystem contract (not native UI evidence)
     writeFileSync(join(expected.vault, 'nested', '日本語.md'), '# 学習\r\n');
     writeFileSync(join(expected.vault, 'nested', 'asset.bin'), Buffer.from([0, 255, 42]));
     writeFileSync(join(expected.vault, '__proto__'), 'content, not an object prototype');
-    expect(() => captureNoteBaseline(root, expected, false)).toThrow(/closed/);
-    const baseline = captureNoteBaseline(root, expected, true);
+    expect(() => captureNoteBaseline(root, expected, true)).toThrow(/verified closed/);
+    expect(() => captureNoteBaseline(root, expected, undefined)).toThrow(/verified closed/);
+    const baseline = captureNoteBaseline(root, expected, stopped);
     const file = join(root, 'artifacts/e2e-smoke/baselines', `${baseline.id}.json`); const before = readFileSync(file);
     expect(Object.keys(baseline.files).sort()).toEqual(['Welcome.md', '__proto__', 'nested/asset.bin', 'nested/日本語.md']);
     expect(loadNoteBaseline(root, expected, baseline.id)).toEqual(baseline);
@@ -30,7 +32,7 @@ describe('pre-startup note baseline filesystem contract (not native UI evidence)
   });
   for (const operation of ['modify', 'add', 'delete', 'rename']) {
     it(`rejects a content file ${operation}`, () => {
-      const { root, expected } = setup(); const baseline = captureNoteBaseline(root, expected, true);
+      const { root, expected } = setup(); const baseline = captureNoteBaseline(root, expected, stopped);
       const note = join(expected.vault, 'Welcome.md');
       if (operation === 'modify') writeFileSync(note, 'mutated\n');
       if (operation === 'add') writeFileSync(join(expected.vault, 'Extra.md'), 'new note');
@@ -45,6 +47,6 @@ describe('pre-startup note baseline filesystem contract (not native UI evidence)
     expect(() => snapshotNotes(root)).toThrow(/symlink/);
     unlinkSync(join(expected.vault, 'linked.md'));
     mkdirSync(join(root, 'sentinel')); symlinkSync(join(root, 'sentinel'), join(root, 'artifacts'));
-    expect(() => captureNoteBaseline(root, expected, true)).toThrow(/symlink/);
+    expect(() => captureNoteBaseline(root, expected, stopped)).toThrow(/symlink/);
   });
 });

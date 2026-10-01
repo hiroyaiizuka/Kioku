@@ -29,10 +29,13 @@ function baselinePath(root, id) {
   return join(root, 'artifacts', 'e2e-smoke', 'baselines', `${id}.json`);
 }
 
-export function captureNoteBaseline(root, expected, vaultClosed) {
-  if (vaultClosed !== true) throw new Error('Confirm Obsidian is closed before capturing the startup baseline.');
+/** `stopped` must be the result of assertDedicatedStopped (dedicated instance not running, no CDP port answering). */
+export function captureNoteBaseline(root, expected, stopped) {
+  if (stopped?.dedicatedInstance !== 'not-running') {
+    throw new Error('The dedicated Obsidian instance must be verified closed (not running) before capturing the startup baseline.');
+  }
   const baseline = { schema: 1, id: randomUUID(), capturedAt: new Date().toISOString(), stage: 'before-startup',
-    vaultClosed: 'operator-confirmed-before-launch', vault: expected.vault, buildId: expected.buildId, version: expected.version,
+    vaultClosed: 'dedicated-instance-verified-not-running', vault: expected.vault, buildId: expected.buildId, version: expected.version,
     files: snapshotNotes(root) };
   const directory = join(root, 'artifacts', 'e2e-smoke', 'baselines'); ensureDirectory(root, directory);
   const file = baselinePath(root, baseline.id); safePath(root, file, 'file', true);
@@ -43,7 +46,7 @@ export function captureNoteBaseline(root, expected, vaultClosed) {
 export function loadNoteBaseline(root, expected, id) {
   const baseline = JSON.parse(safeRead(root, baselinePath(root, id)).toString('utf8'));
   if (baseline.schema !== 1 || baseline.id !== id || baseline.stage !== 'before-startup'
-      || baseline.vaultClosed !== 'operator-confirmed-before-launch' || typeof baseline.capturedAt !== 'string'
+      || baseline.vaultClosed !== 'dedicated-instance-verified-not-running' || typeof baseline.capturedAt !== 'string'
       || !Number.isFinite(Date.parse(baseline.capturedAt)) || baseline.vault !== expected.vault
       || baseline.buildId !== expected.buildId || baseline.version !== expected.version
       || !baseline.files || Array.isArray(baseline.files) || typeof baseline.files !== 'object'

@@ -3,43 +3,11 @@ import { randomUUID } from 'node:crypto';
 import { preflight } from '../lib/harness.mjs';
 import { assertNotesUnchanged, captureNoteBaseline, loadNoteBaseline } from '../lib/note-baseline.mjs';
 import { atomicWrite, ensureDirectory, projectRoot } from '../lib/paths.mjs';
-import { assertNativeTarget, assertStartup, nativeTargetExpression,
+import { CDP, sleep } from '../lib/cdp.mjs';
+import { assertDedicatedStopped, readState, resolvePort } from '../lib/obsidian-instance.mjs';
+import { assertNativeTarget, assertNoForeignModal, assertStartup, modalInventoryExpression, nativeTargetExpression,
   obsidianVersionFromTitle } from './assert-smoke.mjs';
 
-class CDP {
-  constructor(url) { this.url = url; this.nextId = 0; this.pending = new Map(); this.errors = []; }
-  async connect() {
-    this.socket = new WebSocket(this.url);
-    this.socket.addEventListener('message', (event) => {
-      const message = JSON.parse(event.data);
-      if (message.method === 'Runtime.exceptionThrown') this.errors.push(message.params.exceptionDetails.text);
-      if (!message.id) return;
-      const pending = this.pending.get(message.id); if (!pending) return;
-      this.pending.delete(message.id);
-      if (message.error) pending.reject(new Error(message.error.message)); else pending.resolve(message.result);
-    });
-    await new Promise((resolve, reject) => {
-      this.socket.addEventListener('open', resolve, { once: true });
-      this.socket.addEventListener('error', () => reject(new Error('CDP WebSocket connection failed.')), { once: true });
-    });
-    await this.send('Runtime.enable'); await this.send('Page.enable');
-  }
-  send(method, params = {}) {
-    const id = this.nextId += 1;
-    return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.socket.send(JSON.stringify({ id, method, params }));
-    });
-  }
-  async value(expression) {
-    const response = await this.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
-    if (response.exceptionDetails) throw new Error(response.exceptionDetails.text);
-    return JSON.parse(response.result.value);
-  }
-  close() { this.socket.close(); }
-}
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function waitFor(client, expression, wanted) {
   const end = Date.now() + 5000;
   while (Date.now() < end) { if (await client.value(expression) === wanted) return; await sleep(50); }
@@ -47,7 +15,7 @@ async function waitFor(client, expression, wanted) {
 }
 
 function cdpEndpoint() {
-  const endpoint = new URL(process.env.KIOKU_CDP_URL ?? 'http://127.0.0.1:9222');
+  const endpoint = new URL(process.env.KIOKU_CDP_URL ?? `http://127.0.0.1:${resolvePort()}`);
   if (endpoint.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(endpoint.hostname)
       || endpoint.username || endpoint.password || endpoint.pathname !== '/' || endpoint.search || endpoint.hash) {
     throw new Error('CDP must be a loopback HTTP endpoint with no credentials / path / query.');
@@ -57,21 +25,13 @@ function cdpEndpoint() {
 
 async function captureBeforeStartup() {
   const root = projectRoot(); const expected = preflight(root); const endpoint = cdpEndpoint();
-  if (process.env.KIOKU_CONFIRM_VAULT_CLOSED !== '1') {
-    throw new Error('Close Obsidian first, then set KIOKU_CONFIRM_VAULT_CLOSED=1 for baseline capture.');
-  }
-  // A listening desktop CDP page would make a newly captured baseline too late for onload.
-  let response;
-  try { response = await fetch(new URL('/json/list', endpoint), { signal: AbortSignal.timeout(2000) }); }
-  catch (error) { if (error.cause?.code !== 'ECONNREFUSED') throw error; }
-  if (response) {
-    if (!response.ok) throw new Error(`CDP target list returned ${response.status}.`);
-    const targets = await response.json();
-    if (!Array.isArray(targets) || targets.length) throw new Error('Close Obsidian before baseline capture; CDP targets already exist.');
-  }
-  const baseline = captureNoteBaseline(root, expected, true);
-  console.info(JSON.stringify({ status: 'CAPTURED', kind: 'filesystem-baseline-not-ui-test', baseline,
-    next: `Start Obsidian, then KIOKU_BASELINE_ID=${baseline.id} npm run harness:e2e:smoke. Reuse this ID after restart.` }, null, 2));
+  // Automatic: the recorded dedicated instance must not be alive and no CDP port may answer, otherwise the new
+  // baseline would be too late for onload. The user's own Obsidian is neither inspected nor required to close.
+  const stopped = await assertDedicatedStopped(root, [Number(endpoint.port || 80), resolvePort()]);
+  const baseline = captureNoteBaseline(root, expected, stopped);
+  console.info(JSON.stringify({ status: 'CAPTURED', kind: 'filesystem-baseline-not-ui-test', dedicatedInstance: stopped, baseline,
+    next: `npm run harness:launch, then KIOKU_BASELINE_ID=${baseline.id} npm run harness:e2e:smoke. `
+      + 'Restart pair: npm run harness:quit && npm run harness:launch, then the smoke again with the same ID.' }, null, 2));
 }
 
 async function runSmoke() {
@@ -79,7 +39,7 @@ let client;
 let output;
 let root;
 const report = { status: 'FAIL', kind: 'native-obsidian-cdp', startedAt: new Date().toISOString(), steps: [],
-  restart: 'NOT TESTED: run again after an independently performed Obsidian desktop restart.' };
+  restart: 'NOT TESTED: run again with the same KIOKU_BASELINE_ID after npm run harness:quit && npm run harness:launch.' };
 try {
   if (process.argv.length !== 2) throw new Error('Usage: npm run harness:e2e:smoke (configure KIOKU_CDP_URL).');
   root = projectRoot();
@@ -88,10 +48,11 @@ try {
   const expected = preflight(root); report.preflight = expected;
   const baseline = loadNoteBaseline(root, expected, process.env.KIOKU_BASELINE_ID);
   report.noteBaseline = { id: baseline.id, capturedAt: baseline.capturedAt, stage: baseline.stage, vaultClosed: baseline.vaultClosed };
-  report.noteChecks = [{ phase: 'after startup, before UI operations (also after manual restart)',
+  report.noteChecks = [{ phase: 'after startup, before UI operations (also after harness:quit → harness:launch)',
     ...assertNotesUnchanged(root, baseline) }];
   const endpoint = cdpEndpoint();
   report.endpoint = endpoint.href;
+  report.dedicatedInstance = readState(root); // Recorded by harness:launch (null when started otherwise).
   const targets = await fetch(new URL('/json/list', endpoint)).then((response) => {
     if (!response.ok) throw new Error(`CDP target list returned ${response.status}.`); return response.json();
   });
@@ -110,6 +71,8 @@ try {
   if (candidates.length !== 1) throw new Error(`Expected one native dedicated-vault page; found ${candidates.length}.`);
   report.obsidian = candidates[0].state;
   client = new CDP(candidates[0].target.webSocketDebuggerUrl); await client.connect();
+  // A trust / restricted-mode or any other foreign dialog must never be clicked through by the smoke.
+  assertNoForeignModal(await client.value(modalInventoryExpression));
   const ribbonSelector = '.side-dock-ribbon .kioku-ribbon[aria-label="フラッシュカード"]';
   const ribbonCount = await client.value(`JSON.stringify(document.querySelectorAll(${JSON.stringify(ribbonSelector)}).length)`);
   if (ribbonCount !== 1) throw new Error('Enabled native Kioku ribbon absent or duplicated.');
@@ -128,8 +91,7 @@ try {
   }
   await client.value(`JSON.stringify((document.querySelector(${JSON.stringify(ribbonSelector)})?.click(),true))`);
   await waitFor(client, `JSON.stringify(document.querySelectorAll('.kioku-startup-modal').length)`, 1);
-  await client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
-  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+  await client.pressEscape();
   await waitFor(client, `JSON.stringify(document.querySelectorAll('.kioku-startup-modal').length)`, 0);
   report.steps.push({ operation: 'ribbon → modal → Escape', status: 'PASS' });
   if (client.errors.length) throw new Error(`Obsidian page errors: ${client.errors.join('; ')}`);
@@ -138,7 +100,7 @@ try {
 } catch (error) {
   report.error = error.message; console.error(`Native smoke failed: ${error.message}`); process.exitCode = 1;
 } finally {
-  // Disconnect only this CDP WebSocket. Never close or restart the user's Obsidian process.
+  // Disconnect only this CDP WebSocket. Never close or restart any Obsidian process (harness:quit does that).
   if (client) client.close();
   report.finishedAt = new Date().toISOString();
   if (output) atomicWrite(root, join(output, 'record.json'), `${JSON.stringify(report, null, 2)}\n`);

@@ -65,7 +65,7 @@ export function preflight(root) {
   for (const file of installedFiles) {
     const actual = safeRead(root, join(paths.installed, file));
     const expected = sha256(build.files.get(file));
-    if (sha256(actual) !== expected) throw new Error(`Installed hash mismatch: ${file}; run harness:update with Obsidian closed.`);
+    if (sha256(actual) !== expected) throw new Error(`Installed hash mismatch: ${file}; run harness:quit, then harness:update.`);
     hashes[file] = expected;
   }
   return { id: 'kioku', version: build.manifest.version, buildId: build.info.buildId, vault: paths.vault, enabled, hashes };

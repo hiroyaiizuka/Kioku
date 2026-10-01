@@ -29,3 +29,18 @@ export function assertStartup(state, expected) {
     throw new Error('Startup modal is not visibly centered in the Obsidian viewport.');
   }
 }
+
+/** Every open modal container; Kioku's own modal is recognised only by its scoped class. */
+export const modalInventoryExpression = `JSON.stringify([...document.querySelectorAll('.modal-container')].map((container) => ({
+  kioku: Boolean(container.querySelector('.kioku-startup-modal')),
+  classes: [...(container.querySelector('.modal')?.classList ?? [])].join(' ')
+})))`;
+
+export function assertNoForeignModal(modals) {
+  if (!Array.isArray(modals)) throw new Error('Could not inspect open Obsidian modals.');
+  const foreign = modals.filter((modal) => !modal || modal.kioku !== true);
+  if (foreign.length) {
+    const names = foreign.map((modal) => modal?.classes || '(unknown)').join(', ');
+    throw new Error(`Unexpected foreign modal open (e.g. trust / restricted-mode dialog): ${names}`);
+  }
+}

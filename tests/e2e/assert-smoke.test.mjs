@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assertNativeTarget, assertStartup, nativeTargetExpression,
+import { assertNativeTarget, assertNoForeignModal, assertStartup, modalInventoryExpression, nativeTargetExpression,
   obsidianVersionFromTitle } from '../../scripts/e2e/assert-smoke.mjs';
 
 const expected = { buildId: 'abc', version: '0.0.1' };
@@ -26,5 +26,16 @@ describe('native smoke assertions', () => {
     expect(obsidianVersionFromTitle('New tab - test-vault - Obsidian 1.13.7')).toBe('1.13.7');
     expect(obsidianVersionFromTitle('New tab - test-vault - Obsidian v1.13.7')).toBe('');
     expect(obsidianVersionFromTitle('test-vault - Obsidian')).toBe('');
+  });
+  it('fails on any open modal that is not Kioku, including the trust / restricted-mode dialog', () => {
+    expect(() => assertNoForeignModal([])).not.toThrow();
+    expect(() => assertNoForeignModal([{ kioku: true, classes: 'modal kioku-startup-modal' }])).not.toThrow();
+    for (const modals of [[{ kioku: false, classes: 'modal mod-lg mod-trust-folder' }],
+      [{ kioku: true, classes: 'modal' }, { kioku: false, classes: 'modal mod-settings' }], [null], [{}], null, 0]) {
+      expect(() => assertNoForeignModal(modals)).toThrow();
+    }
+    expect(() => assertNoForeignModal([{ kioku: false, classes: 'modal mod-trust-folder' }])).toThrow(/mod-trust-folder/);
+    expect(modalInventoryExpression).toContain("'.modal-container'");
+    expect(modalInventoryExpression).toContain('.kioku-startup-modal');
   });
 });

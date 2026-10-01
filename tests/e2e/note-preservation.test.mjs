@@ -2,7 +2,7 @@
 import { createServer } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, createFixture } from '../helpers/fixture.mjs';
@@ -16,7 +16,7 @@ function frame(text) {
   const head = data.length < 126 ? Buffer.from([0x81, data.length]) : Buffer.from([0x81, 126, data.length >>> 8, data.length & 255]);
   return Buffer.concat([head, data]);
 }
-async function simulatedSmoke(root, expected, baselineId, mutateAt, baselineMode = false) {
+async function simulatedSmoke(root, expected, baselineId, mutateAt, baselineMode = false, foreignModal = false) {
   let modalCount = 0; let closes = 0;
   const sockets = new Set();
   const server = createServer((_req, res) => {
@@ -47,7 +47,9 @@ async function simulatedSmoke(root, expected, baselineId, mutateAt, baselineMode
         const message = JSON.parse(data.toString()); let result = {};
         if (message.method === 'Runtime.evaluate') {
           const expression = message.params.expression; let value;
-          if (expression.includes("require?.('obsidian')")) {
+          if (expression.includes("'.modal-container'")) {
+            value = foreignModal ? [{ kioku: false, classes: 'modal mod-lg mod-trust-folder' }] : [];
+          } else if (expression.includes("require?.('obsidian')")) {
             result = { exceptionDetails: { text: "Cannot find module 'obsidian'" } };
           } else if (expression.includes('versions?.electron')) value = { vault: expected.vault,
             url: popout ? 'about:blank' : 'app://obsidian.md/index.html', processType: 'renderer', electron: '43.3.0' };
@@ -73,7 +75,6 @@ async function simulatedSmoke(root, expected, baselineId, mutateAt, baselineMode
   let processHandle;
   try {
     processHandle = spawn(process.execPath, ['scripts/e2e/smoke.mjs', ...(baselineMode ? ['baseline'] : [])], { cwd: root, env: { ...process.env,
-      KIOKU_CONFIRM_VAULT_CLOSED: '1',
       KIOKU_BASELINE_ID: baselineId, KIOKU_CDP_URL: `http://127.0.0.1:${server.address().port}` } });
     let stdout = ''; let stderr = '';
     processHandle.stdout.on('data', (chunk) => stdout += chunk); processHandle.stderr.on('data', (chunk) => stderr += chunk);
@@ -89,7 +90,7 @@ function setup() {
   const root = createFixture(); roots.push(root); const expected = prepareVault(root);
   const id = randomUUID(); const directory = join(root, 'artifacts/e2e-smoke/baselines'); mkdirSync(directory, { recursive: true });
   const baseline = { schema: 1, id, capturedAt: new Date().toISOString(), stage: 'before-startup',
-    vaultClosed: 'operator-confirmed-before-launch', vault: expected.vault, buildId: expected.buildId, version: expected.version,
+    vaultClosed: 'dedicated-instance-verified-not-running', vault: expected.vault, buildId: expected.buildId, version: expected.version,
     files: { 'Welcome.md': sha256(readFileSync(join(expected.vault, 'Welcome.md'))) } };
   writeFileSync(join(directory, `${id}.json`), JSON.stringify(baseline));
   return { root, expected, id };
@@ -99,9 +100,16 @@ describe('real smoke CLI note preservation using non-UI CDP simulation', () => {
     const { root, expected, id } = setup(); const result = await simulatedSmoke(root, expected, id);
     expect(result.status, result.stderr).toBe(0);
   });
-  it('refuses a new baseline after CDP targets exist', async () => {
+  it('refuses a new baseline while a CDP port answers (dedicated instance already up)', async () => {
     const { root, expected, id } = setup(); const result = await simulatedSmoke(root, expected, id, undefined, true);
-    expect(result.status).toBe(1); expect(result.stderr).toMatch(/Close Obsidian before baseline capture/);
+    expect(result.status).toBe(1); expect(result.stderr).toMatch(/CDP port \d+ already answers/);
+    expect(readdirSync(join(root, 'artifacts/e2e-smoke/baselines'))).toEqual([`${id}.json`]);
+  });
+  it('fails before any UI operation when a foreign modal (trust / restricted-mode dialog) is open', async () => {
+    const { root, expected, id } = setup(); const result = await simulatedSmoke(root, expected, id, undefined, false, true);
+    expect(result.status).toBe(1); expect(result.stderr).toMatch(/Unexpected foreign modal open.*mod-trust-folder/);
+    const report = JSON.parse(result.stdout);
+    expect(report.status).toBe('FAIL'); expect(report.steps).toEqual([]);
   });
   it('refuses UI PASS without a pre-startup baseline ID', async () => {
     const { root, expected } = setup(); const result = await simulatedSmoke(root, expected, '');
