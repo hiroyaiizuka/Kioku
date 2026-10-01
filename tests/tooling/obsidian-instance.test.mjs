@@ -47,7 +47,7 @@ function fakeSystem({ alive = [], commands = {}, list = '', busyPorts = [], sour
       spawned.push({ executable, args, options }); live.add(4242);
       return { pid: 4242, unref() {}, on() {} };
     },
-    waitForDedicatedPage: async ({ version }) => ({ target: { webSocketDebuggerUrl: 'ws://127.0.0.1/fake' }, version }),
+    waitForDedicatedPage: async ({ version }) => ({ target: { webSocketDebuggerUrl: 'ws://127.0.0.1/fake' }, state: { version } }),
     enableCommunityPlugins: async () => 'turned-off-by-harness via app.plugins.setEnable(true) (dedicated profile only)',
   };
 }
@@ -291,7 +291,7 @@ describe('dedicated Obsidian process control (fake process table)', () => {
     system.warn = (message) => warnings.push(message);
     system.waitForDedicatedPage = async ({ version }) => {
       linkSync(paths.lock, join(paths.tooling, 'transient-link')); // Like the restore window: nlink 2.
-      return { target: { webSocketDebuggerUrl: 'ws://x' }, version };
+      return { target: { webSocketDebuggerUrl: 'ws://x' }, state: { version } };
     };
     expect(await launchDedicated(root, {}, system)).toMatchObject({ status: 'LAUNCHED', pid: 4242 });
     expect(warnings.join()).toMatch(/Could not release .*hard link/); expect(existsSync(paths.lock)).toBe(true);
@@ -300,7 +300,7 @@ describe('dedicated Obsidian process control (fake process table)', () => {
     const { root, paths, source } = setup(); writeFileSync(join(source, 'obsidian-1.14.3.asar'), 'asar');
     const system = fakeSystem({ source });
     system.waitForDedicatedPage = async ({ version }) => {
-      writeFileSync(paths.lock, '777\n'); return { target: { webSocketDebuggerUrl: 'ws://x' }, version };
+      writeFileSync(paths.lock, '777\n'); return { target: { webSocketDebuggerUrl: 'ws://x' }, state: { version } };
     };
     await launchDedicated(root, {}, system);
     expect(readFileSync(paths.lock, 'utf8')).toBe('777\n');
@@ -348,7 +348,7 @@ describe('dedicated Obsidian process control (fake process table)', () => {
     const { root, paths, source } = setup(); writeFileSync(join(source, 'obsidian-1.14.3.asar'), 'asar');
     const socket = join(root, 'cli.sock');
     const system = fakeSystem({ source }); system.cliSocketPath = socket;
-    system.waitForDedicatedPage = async ({ version }) => { writeFileSync(socket, 'dedicated'); return { target: { webSocketDebuggerUrl: 'ws://x' }, version }; };
+    system.waitForDedicatedPage = async ({ version }) => { writeFileSync(socket, 'dedicated'); return { target: { webSocketDebuggerUrl: 'ws://x' }, state: { version } }; };
     await launchDedicated(root, {}, system);
     const recorded = readState(root).cliSocket; const own = statSync(socket, { bigint: true });
     expect(recorded).toEqual({ path: socket, dev: String(own.dev), ino: String(own.ino) });

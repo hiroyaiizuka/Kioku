@@ -1,12 +1,18 @@
 // harness:launch CDP steps against a CDP protocol simulation that EVALUATES the real expression text (node:vm) on a
 // fake Obsidian page, so expression shape bugs (e.g. double JSON encoding) fail here. Never starts Obsidian.
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { prepareVault } from '../../scripts/lib/harness.mjs';
+import { launchDedicated } from '../../scripts/lib/obsidian-instance.mjs';
+import { cleanup, createFixture } from '../helpers/fixture.mjs';
 import { enableCommunityPlugins, waitForDedicatedPage } from '../../scripts/lib/dedicated-cdp.mjs';
 import { evaluateInPage, fakeDocument, fakePage, startCdpServer } from '../helpers/cdp-server.mjs';
 
 const vault = '/kioku/test-vault';
 const servers = [];
-afterEach(async () => { while (servers.length) await servers.pop().close(); });
+const roots = [];
+afterEach(async () => { while (servers.length) await servers.pop().close(); while (roots.length) cleanup(roots.pop()); });
 
 /** Fake renderer page globals from a compact description. */
 function pageGlobals({ vault: path = vault, url = 'app://obsidian.md/index.html', layoutReady = true, electron = '39.2.1' } = {}) {
@@ -62,7 +68,8 @@ describe('waitForDedicatedPage (evaluating CDP simulation)', () => {
  * 'enable-plugin-<appId>'; setEnable(true) stores 'true' and loads every configured plugin. The trust dialog is a
  * `.modal-container` with `.mod-trust-folder`; Escape closes the top modal.
  */
-async function pluginServer({ choice = null, trust = true, loaded = ['kioku'], configured = ['kioku'], lateModal = false } = {}) {
+async function pluginServer({ choice = null, trust = true, loaded = ['kioku'], configured = ['kioku'], lateModal = false,
+  vaultPath = vault } = {}) {
   const events = []; const storage = new Map(); if (choice !== null) storage.set('enable-plugin-abc', choice);
   const containers = trust ? [['modal', 'mod-lg', 'mod-trust-folder']] : [];
   const loadedPlugins = {};
@@ -82,8 +89,8 @@ async function pluginServer({ choice = null, trust = true, loaded = ['kioku'], c
       if (value) for (const id of loaded) loadedPlugins[id] = {};
     },
   };
-  const context = fakePage({ ...pageGlobals(), document: fakeDocument(containers),
-    app: { ...pageGlobals().app, appId: 'abc', plugins },
+  const context = fakePage({ ...pageGlobals({ vault: vaultPath }), document: fakeDocument(containers),
+    app: { ...pageGlobals({ vault: vaultPath }).app, appId: 'abc', plugins },
     localStorage: { getItem: (key) => storage.get(key) ?? null } });
   const server = await serve([{ path: '/main', title: 'test-vault - Obsidian 1.14.3', context }], (_page, message) => {
     if (message.method === 'Input.dispatchKeyEvent') {
@@ -92,7 +99,7 @@ async function pluginServer({ choice = null, trust = true, loaded = ['kioku'], c
     }
     return undefined;
   });
-  return { events, target: { webSocketDebuggerUrl: server.url('/main') } };
+  return { events, port: server.port, target: { webSocketDebuggerUrl: server.url('/main') } };
 }
 
 describe('enableCommunityPlugins (evaluating CDP simulation)', () => {
@@ -123,4 +130,21 @@ describe('enableCommunityPlugins (evaluating CDP simulation)', () => {
       await expect(enableCommunityPlugins({ target, verifyTimeoutMs: 300 })).rejects.toThrow(/not in the expected state.*other/);
     });
   }
+});
+
+describe('launchDedicated with the real CDP steps against the evaluating simulation (fake process only)', () => {
+  it('reports the observed Obsidian version, the restricted-mode result and the pid in the launch output', async () => {
+    const root = createFixture(); roots.push(root); const expected = prepareVault(root);
+    const source = join(root, 'fake-app-support'); mkdirSync(source); writeFileSync(join(source, 'obsidian-1.14.3.asar'), 'asar');
+    const { port, events } = await pluginServer({ vaultPath: expected.vault });
+    const live = new Set();
+    const system = { platform: 'darwin', executable: '/fake/Obsidian', asarSourceDir: source, cliSocketPath: join(root, 'no.sock'),
+      kill(pid, signal) { if (!live.has(pid)) throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' }); if (signal) live.delete(pid); },
+      ps: () => ({ status: 0, stdout: '' }), portInUse: async () => false, sleep: async () => {}, now: () => new Date(),
+      spawn: () => { live.add(4242); return { pid: 4242, on() {}, unref() {} }; },
+      waitForDedicatedPage: (options) => waitForDedicatedPage({ ...options, timeoutMs: 3000 }), enableCommunityPlugins };
+    const result = await launchDedicated(root, { KIOKU_CDP_PORT: String(port) }, system);
+    expect(result).toMatchObject({ status: 'LAUNCHED', pid: 4242, version: '1.14.3', port });
+    expect(result.restrictedMode).toMatch(/turned-off-by-harness/); expect(events).toEqual(['setEnable', 'escape']);
+  });
 });

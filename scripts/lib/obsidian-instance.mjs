@@ -412,7 +412,7 @@ async function launchLocked(root, env, system, paths) {
   const identity = socketIdentity(socket);
   writeState(root, { ...state, cliSocket: { path: socket, ...(identity ?? {}) } });
   const restrictedMode = await system.enableCommunityPlugins({ port, target: page.target });
-  return { status: 'LAUNCHED', pid: child.pid, version: page.version, port, startedAt, profile: paths.profile,
+  return { status: 'LAUNCHED', pid: child.pid, version: page.state.version, port, startedAt, profile: paths.profile,
     vault: expected.vault, asar: { version: profile.version, reused: profile.reused, removed: profile.removed },
     restrictedMode, log: paths.log,
     cliSocket: { path: socket, existedBeforeLaunch: socketExisted, takenOver: socketExisted,
