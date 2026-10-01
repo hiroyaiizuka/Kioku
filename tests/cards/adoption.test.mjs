@@ -104,6 +104,12 @@ describe('planAdoption: verify then insert once, never rewriting the original', 
     const paragraphThenList = 'Q: a\nA: b\n- Q: c\n- A: d';
     expect(planAdoption(paragraphThenList, record(extractCandidates(paragraphThenList)[0]), { question: 'a', answer: 'b' }, ID_A).next)
       .toBe('Q: a\nA: b ^kioku-0123456789\n\n- Q: c\n- A: d');
+    const spaced = 'Q: a\nA: b\n   \nQ: c';
+    expect(planAdoption(spaced, record(extractCandidates(spaced)[0]), { question: 'a2', answer: 'b' }, ID_A).next)
+      .toBe('Q: a\nA: b ^kioku-0123456789\n\n%%kioku-edit:kioku-0123456789\nQ: a2\nA: b\n%%\n   \nQ: c');
+    const answerItem = 'Q: a\n- A: b\n  more\n- Q: c';
+    expect(planAdoption(answerItem, record(extractCandidates(answerItem)[0]), { question: 'a', answer: 'b\n  more' }, ID_A).next)
+      .toBe('Q: a\n- A: b\n  more ^kioku-0123456789\n- Q: c');
     const crlfAtEnd = 'Q: a\r\nA: b';
     expect(planAdoption(crlfAtEnd, record(extractCandidates(crlfAtEnd)[0]), { question: 'a2', answer: 'b' }, ID_A).next)
       .toBe('Q: a\r\nA: b ^kioku-0123456789\r\n\r\n%%kioku-edit:kioku-0123456789\r\nQ: a2\r\nA: b\r\n%%');
@@ -156,6 +162,8 @@ describe('planAdoption: verify then insert once, never rewriting the original', 
     const recorded = record(extractCandidates(note)[0]);
     expect(planAdoption('Q: 問い\nA: 答え ^kioku-zzzzzzzzzz', recorded, { question: '問い', answer: '答え' }, ID_A))
       .toEqual({ ok: false, reason: 'この問い・答えは既に採用済みです。' });
+    expect(planAdoption('Q: 問い\nA: 変更', recorded, { question: '問い', answer: '答え' }, ID_A))
+      .toEqual({ ok: false, reason: '原文が抽出後に変更されています。もう一度抽出してください。' });
     expect(planAdoption('Q: 問い\nA: 答え ^mine', recorded, { question: '問い', answer: '答え' }, ID_A))
       .toEqual({ ok: false, reason: expect.stringContaining('block ID') });
   });

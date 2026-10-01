@@ -114,10 +114,10 @@ export class CandidateModal extends Modal {
     });
     if (candidate.needsBlankLine) {
       item.createDiv({ cls: 'kioku-candidate-note',
-        text: '直後に文があるため、採用時にこのブロックの後へ空行を1行追加します（ID を段落末に置くため。原文の文字は変えません）。' });
+        text: '直後に空行がないため、採用時にこのブロックの後へ空行を1行追加します（ID を段落末に置くため。原文の文字は変えません。改行コードは Obsidian の編集画面の扱いに従います）。' });
     } else if (candidate.followedByText) {
       item.createDiv({ cls: 'kioku-candidate-note',
-        text: '編集して採用した場合だけ、編集記録の後に空行を1行追加します（原文の文字は変えません）。' });
+        text: '編集して採用した場合だけ、編集記録の後に空行を1行追加します（原文の文字は変えません。改行コードは Obsidian の編集画面の扱いに従います）。' });
     }
     item.createDiv({ cls: 'kioku-candidate-message', text: entry.message });
     const actions = item.createDiv({ cls: 'kioku-candidate-actions' });

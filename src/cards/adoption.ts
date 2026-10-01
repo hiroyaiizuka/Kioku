@@ -54,7 +54,7 @@ function locate(candidates: readonly Candidate[], recorded: RecordedCandidate): 
   if (!target) {
     return matches.length > 1
       ? '同じ原文が複数あり、位置を特定できません（外部で変更された可能性があります）。'
-      : '原文が抽出後に変更されたため保存しませんでした。もう一度抽出してください。';
+      : '原文が抽出後に変更されています。もう一度抽出してください。';
   }
   if (target.status === 'adopted' || target.status === 'duplicate-id') return 'この問い・答えは既に採用済みです。';
   if (target.status === 'foreign-block-id') return '既存の block ID があるため採用できません。';

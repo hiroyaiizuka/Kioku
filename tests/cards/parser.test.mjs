@@ -236,6 +236,11 @@ describe('adoption markers and duplicate detection', () => {
     // Lazy / indented continuation of the A item still belongs to the list item: stay tight.
     expect(extractCandidates('- Q: a\n- A: b\n  more\n- Q: c\n- A: d').map((item) => item.needsBlankLine)).toEqual([false, false]);
     expect(extractCandidates('- Q: a\n- A: b\nmore\n- Q: c\n- A: d').map((item) => item.needsBlankLine)).toEqual([false, false]);
+    // Only the answer line is a list item (a list may interrupt the question paragraph): stay tight.
+    expect(extractCandidates('Q: a\n- A: b\n  more\n- Q: c\n- A: d').map((item) => item.needsBlankLine)).toEqual([false, false]);
+    // A whitespace-only following line is already blank.
+    expect(extractCandidates('Q: a\nA: b\n \t\nQ: c\nA: d').map((item) => [item.needsBlankLine, item.followedByText]))
+      .toEqual([[false, false], [false, false]]);
     // A paragraph followed by a list needs the blank line.
     expect(extractCandidates('Q: a\nA: b\n- Q: c\n- A: d').map((item) => item.needsBlankLine)).toEqual([true, false]);
     expect(extractCandidates('- Q: a\n- A: b\n- Q: c\n- A: d').map((item) => item.followedByText)).toEqual([true, false]);

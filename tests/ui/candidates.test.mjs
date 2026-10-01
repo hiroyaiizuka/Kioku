@@ -144,8 +144,8 @@ describe('adoption through the open editor', () => {
     editor.text = NOTE.replace('A: 光で糖を作る反応', 'A: 外部で書き換え');
     await click(card(0).querySelector('.kioku-candidate-adopt'));
     expect(editor.transactions).toEqual([]);
-    expect(notices[0]).toContain('Kioku：保存しませんでした。原文が抽出後に変更');
-    expect(card(0).querySelector('.kioku-candidate-message').textContent).toContain('原文が抽出後に変更');
+    expect(notices[0]).toBe('Kioku：保存しませんでした。原文が抽出後に変更されています。もう一度抽出してください。');
+    expect(card(0).querySelector('.kioku-candidate-message').textContent).toBe('保存しませんでした：原文が抽出後に変更されています。もう一度抽出してください。');
     expect(card(0).querySelector('.kioku-candidate-question').value).toBe('下書き');
   });
 
@@ -191,7 +191,7 @@ describe('adoption through the open editor', () => {
     const note = 'Q: 一つ目\nA: 答え1\nQ: 二つ目\nA: 答え2';
     const { plugin, editor } = openNote(note);
     extractCommand(plugin).checkCallback(false);
-    expect(card(0).querySelector('.kioku-candidate-note').textContent).toContain('空行を1行追加');
+    expect(card(0).querySelector('.kioku-candidate-note').textContent).toBe('直後に空行がないため、採用時にこのブロックの後へ空行を1行追加します（ID を段落末に置くため。原文の文字は変えません。改行コードは Obsidian の編集画面の扱いに従います）。');
     expect(card(1).querySelector('.kioku-candidate-note')).toBeNull();
     await click(card(0).querySelector('.kioku-candidate-adopt'));
     expect(editor.getValue()).toMatch(/^Q: 一つ目\nA: 答え1 \^kioku-\w{10}\n\nQ: 二つ目\nA: 答え2$/);
@@ -203,7 +203,7 @@ describe('adoption through the open editor', () => {
     const note = '- Q: 一つ目\n- A: 答え1\n- Q: 二つ目\n- A: 答え2';
     const { plugin, editor } = openNote(note);
     extractCommand(plugin).checkCallback(false);
-    expect(card(0).querySelector('.kioku-candidate-note').textContent).toContain('編集して採用した場合だけ');
+    expect(card(0).querySelector('.kioku-candidate-note').textContent).toBe('編集して採用した場合だけ、編集記録の後に空行を1行追加します（原文の文字は変えません。改行コードは Obsidian の編集画面の扱いに従います）。');
     expect(card(1).querySelector('.kioku-candidate-note')).toBeNull();
     await click(card(0).querySelector('.kioku-candidate-adopt'));
     expect(editor.getValue()).toMatch(/^- Q: 一つ目\n- A: 答え1 \^kioku-\w{10}\n- Q: 二つ目\n- A: 答え2$/);
