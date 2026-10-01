@@ -1,0 +1,29 @@
+# Kioku の開発
+
+Node.js は `.nvmrc` の **22.22.3** を使う。tooling の direct dependency は exact stable version で lock し、runtime dependency は M0 ではゼロ。
+
+```sh
+nvm use
+npm ci
+npm run check
+```
+
+主なコマンド:
+
+```sh
+npm run lint
+npm run typecheck
+npm test
+npm run build
+npm run package
+npm run harness:prepare    # 初回、新規専用 Vault のみ
+npm run harness:update     # Obsidian を閉じ、4配布物だけ更新
+npm run harness:preflight
+KIOKU_CONFIRM_VAULT_CLOSED=1 npm run harness:e2e:smoke -- baseline # 実機担当、enable/startup 前。出力された ID を保持
+KIOKU_BASELINE_ID="表示されたUUID" npm run harness:e2e:smoke # 実機担当、running native Obsidian + loopback CDP。restart 後も同じ ID
+npm run hooks:install      # Git 作成後の任意 hook。check を skip しない
+```
+
+生成物は `dist/kioku/`、試用 Vault は `test-vault/`、実行証跡は `artifacts/`。すべて git 管理外。`npm run check` は実機を起動せず、実機成功を主張しない。プライマリーは `main` に置き、チケットごとに独立した Git worktree で作業する。main への直接 push は行わず、変更は PR でレビューする。
+
+dependency 更新では Node/Obsidian の互換、公式 lint peer、lock、audit を確認する。Obsidian API 型は `manifest.minAppVersion` と同じ。Node security advisory が tooling の local-only test server/型 package にだけある場合も、残る理由と到達可能性をレビューへ記録する。

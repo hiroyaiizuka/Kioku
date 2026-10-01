@@ -1,0 +1,17 @@
+.kioku-startup-modal {
+  width: min(32rem, 90vw);
+}
+
+.kioku-startup-modal .kioku-startup-status {
+  font-weight: var(--font-semibold);
+}
+
+.kioku-startup-modal .kioku-build-identity {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  overflow-wrap: anywhere;
+}
+
+.kioku-startup-modal .kioku-startup-close {
+  margin-top: var(--size-4-2);
+}

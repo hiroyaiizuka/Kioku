@@ -1,0 +1,40 @@
+# Kioku ハーネス
+
+## 自動ゲート
+
+| ゲート | コマンド | 固定する内容 |
+| --- | --- | --- |
+| metadata | `npm run validate` | ID/name/desktop/version、lock、固定 deps、文書、LICENSE |
+| lint | `npm run lint` | 公式 `eslint-plugin-obsidianmd` recommended、runtime の Node 禁止、JSON/Node script |
+| type | `npm run typecheck` | strict、unchecked index、override、unused |
+| test | `npm test` | modal honesty/lifecycle・ノート I/O 禁止の変異検査、fixture containment、prepare/update preservation、hash/enablement、ノート不変の非UI検査 |
+| build/package | `npm run build && npm run package` | 共通 recipe の browser production bundle、現入力から write:false で再生成した期待 bytes/imports と4配布物を比較。dist の自己申告 hash だけでは認定しない |
+| all | `npm run check` | 上記を順に実行。実機は起動しない |
+
+CI は `npm ci` と `npm run check` を実行し dist を検査用 artifact にするだけで、公開しない。`npm run hooks:install` は Git worktree 作成後だけ任意で使え、pre-commit が同じ check を必ず実行する。
+
+## 専用 test-vault
+
+1. `npm ci && npm run check`
+2. 初回だけ `npm run harness:prepare`。`test-vault/` が存在すれば拒否し、既存 Vault を採用しない。
+3. 手動編集後は Obsidian を閉じて `npm run harness:update`。built plugin 4 files 以外を変えない。
+4. 起動前に `npm run harness:preflight`。source inputs = 再生成した production bytes/imports = dist = installed bytes、marker、ID/version/build ID、enabled plugin が Kioku だけであることを見る。再生成はメモリ上のみで dist を修復しない。
+
+prepare/update/preflight は filesystem の成功であり、Obsidian UI の成功ではない。`test-vault/Welcome.md` は初回 fixture であり update では触れない。本番 Vault を指定する引数はない。
+
+## Obsidian desktop smoke
+
+**enable/startup より前**にノートの baseline を採る。起動後に snapshot を採り直すと onload による書き込みを見逃すため禁止する。
+
+1. テスト担当が専用 Vault を開く Obsidian を完全に閉じ、必要なら `harness:update` を行う。
+2. `KIOKU_CONFIRM_VAULT_CLOSED=1 KIOKU_CDP_URL=http://127.0.0.1:9222 npm run harness:e2e:smoke -- baseline`。script は閉じたことの担当者確認を必須とし、既に CDP targets がある場合は拒否する。`artifacts/e2e-smoke/baselines/<ID>.json` に専用 Vault の内容ファイル一覧と SHA-256 を排他的に保存し、ID を表示する。この段階の status は `CAPTURED` であり、UI の PASS ではない。
+3. 表示された ID を `KIOKU_BASELINE_ID` に指定し、同じ build の Obsidian を remote-debugging port 付きで専用 Vault に起動する（初回の Kioku 有効化を含む）。
+4. `KIOKU_BASELINE_ID=<ID> KIOKU_CDP_URL=http://127.0.0.1:9222 npm run harness:e2e:smoke`。baseline が無い・identity が異なる場合は FAIL。startup 後かつ UI 操作前、各 open/close 後、Escape 後のファイル一覧/hash が **起動前 baseline** と同じことを必須判定し、追加・削除・rename・bytes 変更のいずれも FAIL にする。
+
+script は loopback CDP 以外を拒否し、専用 Vault の native page が1つ、ribbon が1つ、build ID/version が current preflight と同じ中央 modal が1つであることを検査する。2回の open/close、Escape、page error を確認し、`artifacts/e2e-smoke/` に JSON と screenshot を残す。実際の plugin/modal が無ければ FAIL する。
+
+baseline の対象は Markdown・Excalidraw・添付を含む全内容ファイル。Obsidian が変更する `.obsidian/` と harness marker `.kioku-generated` だけを除外する。baseline 自体を再保存・上書きしない。テスト中の手動ノート編集は禁止。CDP の無い別プロセスまで script が閉鎖を証明することはできず、担当者の閉鎖確認が必要。書き込み後に元 bytes へ戻すような一時的 I/O は snapshot だけでは検出できないため、unit mock は Vault/adapter/Editor 経路の read/write を拒否・監視し、レビューの startup-write mutant が落ちることも固定する。
+
+`tests/e2e/note-preservation.test.mjs` は script を CDP **プロトコル模擬**で検査する非UI回帰ケース。模擬 run の PASS/画像は実機証跡ではない。通常の実機 smoke は native Obsidian だけで実行する。
+
+desktop restart は script 自身がアプリを終了/起動しないため、担当が restart 後に **同じ KIOKU_BASELINE_ID** でもう一度 smoke を実行し、2 run の証跡を関連付ける。restart 前に baseline を採り直さない。単独 run の record は restart を `NOT TESTED` と明記する。実機を起動していない開発ワーカーは PASS を報告してはならない。
