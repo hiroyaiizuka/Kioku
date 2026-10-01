@@ -96,6 +96,17 @@ describe('planAdoption: verify then insert once, never rewriting the original', 
     const list = '- Q: a\n- A: b\n- Q: c\n- A: d';
     const listPlan = planAdoption(list, record(extractCandidates(list)[0]), { question: 'a', answer: 'b' }, ID_A);
     expect(listPlan.next).toBe('- Q: a\n- A: b ^kioku-0123456789\n- Q: c\n- A: d');
+    const listEdited = planAdoption(list, record(extractCandidates(list)[0]), { question: 'a2', answer: 'b' }, ID_A);
+    expect(listEdited.next).toBe('- Q: a\n- A: b ^kioku-0123456789\n\n%%kioku-edit:kioku-0123456789\nQ: a2\nA: b\n%%\n\n- Q: c\n- A: d');
+    const lazy = '- Q: a\n- A: b\nmore\n- Q: c';
+    expect(planAdoption(lazy, record(extractCandidates(lazy)[0]), { question: 'a', answer: 'b\nmore' }, ID_A).next)
+      .toBe('- Q: a\n- A: b\nmore ^kioku-0123456789\n- Q: c');
+    const paragraphThenList = 'Q: a\nA: b\n- Q: c\n- A: d';
+    expect(planAdoption(paragraphThenList, record(extractCandidates(paragraphThenList)[0]), { question: 'a', answer: 'b' }, ID_A).next)
+      .toBe('Q: a\nA: b ^kioku-0123456789\n\n- Q: c\n- A: d');
+    const crlfAtEnd = 'Q: a\r\nA: b';
+    expect(planAdoption(crlfAtEnd, record(extractCandidates(crlfAtEnd)[0]), { question: 'a2', answer: 'b' }, ID_A).next)
+      .toBe('Q: a\r\nA: b ^kioku-0123456789\r\n\r\n%%kioku-edit:kioku-0123456789\r\nQ: a2\r\nA: b\r\n%%');
     const listThenText = '- Q: a\n- A: b\nQ: c\nA: d';
     expect(planAdoption(listThenText, record(extractCandidates(listThenText)[0]), { question: 'a', answer: 'b' }, ID_A).next)
       .toBe('- Q: a\n- A: b ^kioku-0123456789\n\nQ: c\nA: d');
@@ -144,7 +155,7 @@ describe('planAdoption: verify then insert once, never rewriting the original', 
     const note = 'Q: 問い\nA: 答え';
     const recorded = record(extractCandidates(note)[0]);
     expect(planAdoption('Q: 問い\nA: 答え ^kioku-zzzzzzzzzz', recorded, { question: '問い', answer: '答え' }, ID_A))
-      .toEqual({ ok: false, reason: expect.stringContaining('既に採用済み') });
+      .toEqual({ ok: false, reason: 'この問い・答えは既に採用済みです。' });
     expect(planAdoption('Q: 問い\nA: 答え ^mine', recorded, { question: '問い', answer: '答え' }, ID_A))
       .toEqual({ ok: false, reason: expect.stringContaining('block ID') });
   });
@@ -172,6 +183,9 @@ describe('planAdoption: verify then insert once, never rewriting the original', 
     }
     expect(validateEdit({ question: '- 箇条書き', answer: '答え\n- 続き' })).toBeNull();
     expect(validateEdit({ question: 'x', answer: 'y\n```' })).not.toBeNull();
+    const markerReason = validateEdit({ question: 'x', answer: '一行目\nQ: 次の問い' });
+    expect(markerReason).toBe('空行・見出し・行頭の問い/答えの印（Q: や A: など）を含む編集は保存できません。');
+    expect(markerReason).not.toContain('Q/A');
     expect(validateEdit({ question: 'inline `code` と $x$', answer: 'y' })).toBeNull();
     expect(normalizeField('  a  \r\n b \n')).toBe('a\n b');
   });

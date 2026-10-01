@@ -34,6 +34,8 @@ export interface RawBlock extends CardText {
    * not a list item continuing a list. Adoption then inserts one blank line so the block ID ends a block.
    */
   readonly needsBlankLine: boolean;
+  /** The line after the block exists and is non-blank (an inserted edit record then needs a blank line after it). */
+  readonly followedByText: boolean;
 }
 
 export type CandidateStatus = 'new' | 'adopted' | 'duplicate-id' | 'foreign-block-id';
@@ -79,12 +81,14 @@ export function findBlocks(lines: readonly Line[], kinds: readonly ExclusionKind
       }
     }
     const after = lines[next];
-    const last = lines[next - 1];
-    // A list item followed by another list item is already its own block; a blank line there
-    // would only turn a tight list into a loose one.
-    const listContinues = last !== undefined && after !== undefined && LIST_ITEM.test(last.text) && LIST_ITEM.test(after.text);
+    const followedByText = after !== undefined && !isBlank(after.text);
+    // A block inside a list item (its Q line, A line or last line is a list item, including lazy
+    // continuation lines) followed by another list item is already its own block; a blank line
+    // there would only turn a tight list into a loose one.
+    const inListItem = [index, answerLine, next - 1].some((line) => LIST_ITEM.test(lines[line]?.text ?? ''));
+    const listContinues = followedByText && inListItem && LIST_ITEM.test(after.text);
     const block = answerLine < 0 ? null
-      : readBlock(lines, index, answerLine, next - 1, after !== undefined && !isBlank(after.text) && !listContinues);
+      : readBlock(lines, index, answerLine, next - 1, { needsBlankLine: followedByText && !listContinues, followedByText });
     if (block) blocks.push(block);
     index = next;
   }
@@ -92,7 +96,7 @@ export function findBlocks(lines: readonly Line[], kinds: readonly ExclusionKind
 }
 
 function readBlock(lines: readonly Line[], first: number, answerLine: number, last: number,
-  needsBlankLine: boolean): RawBlock | null {
+  spacing: { readonly needsBlankLine: boolean; readonly followedByText: boolean }): RawBlock | null {
   const firstLine = lines[first];
   const lastLine = lines[last];
   if (!firstLine || !lastLine) return null;
@@ -110,7 +114,7 @@ function readBlock(lines: readonly Line[], first: number, answerLine: number, la
   const card = { question: fieldText(question), answer: fieldText(answer) };
   if (!card.question || !card.answer) return null;
   const sourceText = lines.slice(first, last).map((line) => line.text + line.eol).join('') + lastText;
-  return { ...card, start: firstLine.start, end: lastLine.end, line: first, blockId, sourceText, needsBlankLine };
+  return { ...card, start: firstLine.start, end: lastLine.end, line: first, blockId, sourceText, ...spacing };
 }
 
 /** Reads `%%kioku-edit:<id>` records. Only comment lines can hold a record. */

@@ -81,8 +81,9 @@ export function planAdoption(text: string, recorded: RecordedCandidate, edited: 
   let insert = ` ^${cardId}`;
   if (changed) insert += `${eol}${eol}${EDIT_RECORD_PREFIX}${cardId}${eol}${serializeCard(edit, eol)}${eol}%%`;
   // The block (or its edit record) must end a paragraph so `^kioku-…` is a valid block ID:
-  // when non-blank text follows directly, add exactly one line break (a blank line).
-  if (target.needsBlankLine) insert += eol;
+  // when non-blank text follows directly, add exactly one line break (a blank line). The tight-list
+  // exception applies only without an edit record, which is a separate block needing a blank line.
+  if (changed ? target.followedByText : target.needsBlankLine) insert += eol;
   const offset = target.end;
   return { ok: true, cardId, offset, insert, next: text.slice(0, offset) + insert + text.slice(offset) };
 }

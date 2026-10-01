@@ -233,6 +233,12 @@ describe('adoption markers and duplicate detection', () => {
     expect(extractCandidates('- Q: a\n- A: b\n- Q: c\n- A: d').map((item) => item.needsBlankLine)).toEqual([false, false]);
     expect(extractCandidates('Q: a\nA:\n1. x\n2. y\n- Q: c\n- A: d').map((item) => item.needsBlankLine)).toEqual([false, false]);
     expect(extractCandidates('- Q: a\n- A: b\nQ: c\nA: d').map((item) => item.needsBlankLine)).toEqual([true, false]);
+    // Lazy / indented continuation of the A item still belongs to the list item: stay tight.
+    expect(extractCandidates('- Q: a\n- A: b\n  more\n- Q: c\n- A: d').map((item) => item.needsBlankLine)).toEqual([false, false]);
+    expect(extractCandidates('- Q: a\n- A: b\nmore\n- Q: c\n- A: d').map((item) => item.needsBlankLine)).toEqual([false, false]);
+    // A paragraph followed by a list needs the blank line.
+    expect(extractCandidates('Q: a\nA: b\n- Q: c\n- A: d').map((item) => item.needsBlankLine)).toEqual([true, false]);
+    expect(extractCandidates('- Q: a\n- A: b\n- Q: c\n- A: d').map((item) => item.followedByText)).toEqual([true, false]);
   });
 
   it('marks copied kioku IDs as duplicate and foreign block IDs as not adoptable', () => {
