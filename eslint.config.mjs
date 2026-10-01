@@ -10,7 +10,7 @@ const nodeOnlyOff = Object.fromEntries(
 );
 
 export default defineConfig(
-  globalIgnores(['node_modules/**', 'dist/**', 'test-vault/**', 'artifacts/**', '.tooling/**', 'coverage/**', 'package-lock.json']),
+  globalIgnores(['.claude/worktrees/**', 'node_modules/**', 'dist/**', 'test-vault/**', 'artifacts/**', '.tooling/**', 'coverage/**', 'package-lock.json']),
   { files: ['src/**/*.ts'], extends: [...obsidianmd.configs.recommended] },
   {
     files: ['src/**/*.ts'],
@@ -25,6 +25,6 @@ export default defineConfig(
     },
   },
   { files: ['**/*.mjs'], extends: [js.configs.recommended], languageOptions: { globals: globals.node } },
-  { files: ['scripts/e2e/smoke.mjs', 'tests/ui/startup.test.mjs'], languageOptions: { globals: { ...globals.node, ...globals.browser } } },
+  { files: ['scripts/e2e/smoke.mjs', 'tests/ui/*.test.mjs', 'tests/helpers/obsidian-mock.mjs'], languageOptions: { globals: { ...globals.node, ...globals.browser } } },
   { files: ['*.json'], plugins: { json }, language: 'json/json', extends: ['json/recommended'] },
 );
