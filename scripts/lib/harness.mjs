@@ -40,7 +40,7 @@ export function prepareVault(root) {
   ensureDirectory(root, paths.installed);
   for (const [file, bytes] of build.files) atomicWrite(root, join(paths.installed, file), bytes);
   atomicWrite(root, paths.enabled, '["kioku"]\n');
-  atomicWrite(root, join(paths.vault, 'Welcome.md'), '# Kioku M0 起動確認\n\nカード作成・保存・復習は未実装です。\n左 ribbon の「フラッシュカード」を開き、起動確認ポップアップを閉じてください。\nこのノートの変更は harness:update で上書きされません。\n');
+  atomicWrite(root, join(paths.vault, 'Welcome.md'), '# Kioku 専用テスト Vault\n\nM1：明示 Q/A（Q:/A:）の候補確認・編集・採用だけを実装しています。デッキ・復習・AI は未実装です。\n左 ribbon の「フラッシュカード」で状態ポップアップを開けます。\nこのノートの変更は harness:update で上書きされません。\n');
   return preflight(root);
 }
 

@@ -53,7 +53,7 @@ async function simulatedSmoke(root, expected, baselineId, mutateAt, baselineMode
             result = { exceptionDetails: { text: "Cannot find module 'obsidian'" } };
           } else if (expression.includes('versions?.electron')) value = { vault: expected.vault,
             url: popout ? 'about:blank' : 'app://obsidian.md/index.html', processType: 'renderer', electron: '43.3.0' };
-          else if (expression.includes('getBoundingClientRect')) value = { count: 1, text: 'Kioku M0 未実装', ...expected,
+          else if (expression.includes('getBoundingClientRect')) value = { count: 1, text: 'Kioku M1 デッキ・復習・AI は未実装', ...expected,
             x: 300, y: 200, width: 400, height: 300, viewportWidth: 1000, viewportHeight: 700 };
           else if (expression.includes('?.click()')) {
             if (expression.includes('kioku-startup-close')) {
