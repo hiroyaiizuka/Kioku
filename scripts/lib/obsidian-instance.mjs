@@ -364,19 +364,15 @@ async function launchLocked(root, env, system, paths) {
   if (strays.length) throw new Error(`Unrecorded processes use the dedicated profile (pid ${strays.join(', ')}); refusing to launch a second one.`);
   if (await system.portInUse(port)) throw new Error(`CDP port ${port} is already in use; refusing to launch (set KIOKU_CDP_PORT).`);
   // Obsidian on macOS unlinks and re-listens on this socket at startup and unlinks it on quit (see docs/harness.md).
-  // Decided before spawning (lstat only); taking over an existing socket is opt-in.
-  const socket = system.cliSocketPath ?? cliSocketPath(env.HOME ?? userInfo().homedir);
-  let socketExisted = false;
-  try { lstatSync(socket); socketExisted = true; } catch { socketExisted = false; }
-  if (socketExisted && env.KIOKU_ALLOW_CLI_SOCKET_TAKEOVER !== '1') {
-    throw new Error(`${socket} exists (another Obsidian's CLI socket). Launching would take it over: while the dedicated `
-      + 'instance runs, `obsidian` CLI commands from you or agents would reach the dedicated test-vault instance, and on quit '
-      + 'the socket is removed, so your CLI stays broken until you restart your Obsidian (the GUI is unaffected). Nothing was '
-      + 'started. Only with the user\'s explicit consent: KIOKU_ALLOW_CLI_SOCKET_TAKEOVER=1 npm run harness:launch.');
-  }
+  // Early gate (so a refusal creates nothing), lstat only; taking over an existing socket is opt-in.
+  const socket = system.cliSocketPath ?? resolveCliSocketPath(env);
+  assertSocketTakeoverAllowed(socket, env);
 
   const profile = prepareProfile(root, { vault: expected.vault, sourceDir: system.asarSourceDir ?? defaultAsarSourceDir(system.platform),
     minAppVersion, now: system.now().getTime() });
+  // Re-check right before spawn: a socket may have appeared meanwhile (e.g. the user started Obsidian). A sub-second
+  // window between spawn and Obsidian's own unlink/listen remains and cannot be closed from outside (docs/harness.md).
+  const socketExisted = assertSocketTakeoverAllowed(socket, env);
   safePath(root, paths.log, 'file', true);
   const log = openSync(paths.log, 'a', 0o600);
   let child;
@@ -426,6 +422,32 @@ export function resolveQuitTimeout(env = process.env) {
 
 /** Where macOS Obsidian 1.14.3 puts its CLI socket: join(os.homedir(), '.obsidian-cli.sock') (XDG is ignored on darwin). */
 export const cliSocketPath = (home = userInfo().homedir) => join(home, '.obsidian-cli.sock');
+/** os.homedir() semantics: HOME when non-empty, otherwise the passwd home directory. */
+export const resolveCliSocketPath = (env = process.env) => cliSocketPath(env.HOME || userInfo().homedir);
+
+/** lstat only. ENOENT is the only "absent"; any other error (EACCES, ENOTDIR, ELOOP, ...) refuses (fail closed). */
+export function cliSocketExists(socket) {
+  try { lstatSync(socket); return true; }
+  catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw new Error(`Cannot determine whether ${socket} exists (${error.code ?? error.message}); refusing to launch. Nothing was started.`);
+  }
+}
+
+function assertSocketTakeoverAllowed(socket, env) {
+  const exists = cliSocketExists(socket);
+  if (exists && env.KIOKU_ALLOW_CLI_SOCKET_TAKEOVER !== '1') {
+    throw new Error(`${socket} exists (another Obsidian's CLI socket). Launching would take it over: while the dedicated `
+      + 'instance runs, `obsidian` CLI commands from you or agents would reach the dedicated test-vault instance, and on quit '
+      + 'the socket is removed, so your CLI stays broken until you restart your Obsidian (the GUI is unaffected). Nothing was '
+      + 'started. Only with the user\'s explicit consent: KIOKU_ALLOW_CLI_SOCKET_TAKEOVER=1 npm run harness:launch.');
+  }
+  return exists;
+}
+
+function socketState(socket) {
+  try { lstatSync(socket); return true; } catch (error) { return error.code === 'ENOENT' ? false : `unknown (${error.code})`; }
+}
 
 export async function quitDedicated(root, system = defaultSystem, timeoutMs = defaultQuitTimeoutMs) {
   const paths = instancePaths(root);
@@ -445,6 +467,10 @@ export async function quitDedicated(root, system = defaultSystem, timeoutMs = de
     return { status: 'NOT_RUNNING', pid: recorded.state.pid, message: `${recorded.reason}; nothing was signalled. State cleared.` };
   }
   const { pid } = recorded.state;
+  // lstat only (never touched): a socket right before quit is likely another Obsidian's if it was started meanwhile,
+  // and the dedicated instance's will-quit unlink may remove it (inferred from the 1.14.3 asar).
+  const socket = system.cliSocketPath ?? resolveCliSocketPath();
+  const existedBeforeQuit = socketState(socket);
   system.kill(pid, 'SIGTERM');
   const end = Date.now() + timeoutMs;
   while (isAlive(pid, system)) {
@@ -467,5 +493,12 @@ export async function quitDedicated(root, system = defaultSystem, timeoutMs = de
     helpers = profileProcesses(paths.profile, system);
   }
   clearState(root);
-  return { status: 'STOPPED', pid, port: recorded.state.port, message: 'SIGTERM sent to the recorded dedicated PID only; it exited.' };
+  const cliSocket = { path: socket, existedBeforeQuit, existsAfterQuit: socketState(socket) };
+  if (existedBeforeQuit === true) {
+    cliSocket.warning = 'A CLI socket existed right before quit. If you started your own Obsidian while the dedicated instance ran, '
+      + 'its socket may have been removed by the dedicated instance on quit: restart your Obsidian to restore its CLI.';
+    warn(system, cliSocket.warning);
+  }
+  return { status: 'STOPPED', pid, port: recorded.state.port, cliSocket,
+    message: 'SIGTERM sent to the recorded dedicated PID only; it exited.' };
 }

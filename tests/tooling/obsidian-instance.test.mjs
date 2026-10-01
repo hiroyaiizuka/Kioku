@@ -4,12 +4,13 @@ import { EventEmitter } from 'node:events';
 import { createServer } from 'node:net';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
+import { userInfo } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, createFixture } from '../helpers/fixture.mjs';
 import { prepareVault } from '../../scripts/lib/harness.mjs';
 import { restrictedModeAction } from '../../scripts/lib/dedicated-cdp.mjs';
-import { assertDedicatedStopped, childEnvironment, cliSocketPath, compareVersions, defaultAsarSourceDir, instancePaths, launchDedicated, ownsProfile,
-  portInUse, prepareProfile, quitDedicated, readState, resolveExecutable, resolvePort, resolveQuitTimeout, selectAsar, vaultId,
+import { assertDedicatedStopped, childEnvironment, cliSocketExists, cliSocketPath, compareVersions, defaultAsarSourceDir, instancePaths, launchDedicated, ownsProfile,
+  portInUse, prepareProfile, quitDedicated, readState, resolveCliSocketPath, resolveExecutable, resolvePort, resolveQuitTimeout, selectAsar, vaultId,
   writeState } from '../../scripts/lib/obsidian-instance.mjs';
 
 const roots = [];
@@ -320,6 +321,42 @@ describe('dedicated Obsidian process control (fake process table)', () => {
     mkdirSync(join(other.root, 'h')); writeFileSync(join(other.root, 'h', '.obsidian-cli.sock'), '');
     const viaHome = fakeSystem({ source: other.source }); delete viaHome.cliSocketPath;
     await expect(launchDedicated(other.root, { HOME: join(other.root, 'h') }, viaHome)).rejects.toThrow(/h\/\.obsidian-cli\.sock exists/);
+  });
+  it('CLI socket check fails closed on lstat errors, re-checks right before spawn, and treats empty HOME as unset', async () => {
+    const { root, paths, source } = setup(); writeFileSync(join(source, 'obsidian-1.14.3.asar'), 'asar');
+    writeFileSync(join(root, 'not-a-dir'), '');
+    const enotdir = fakeSystem({ source }); enotdir.cliSocketPath = join(root, 'not-a-dir', '.obsidian-cli.sock');
+    await expect(launchDedicated(root, {}, enotdir)).rejects.toThrow(/Cannot determine whether .* exists \(ENOTDIR\)/);
+    await expect(launchDedicated(root, { KIOKU_ALLOW_CLI_SOCKET_TAKEOVER: '1' }, enotdir)).rejects.toThrow(/ENOTDIR/);
+    expect(enotdir.spawned).toEqual([]); expect(existsSync(paths.profile)).toBe(false);
+    expect(() => cliSocketExists(join(root, 'not-a-dir', 'x'))).toThrow(/ENOTDIR/);
+    expect(cliSocketExists(join(root, 'missing'))).toBe(false);
+
+    // The socket appears after the early gate (system.now() runs just before prepareProfile): the re-check refuses.
+    const late = fakeSystem({ source }); late.cliSocketPath = join(root, 'late.sock'); const now = late.now;
+    late.now = () => { writeFileSync(late.cliSocketPath, ''); return now(); };
+    await expect(launchDedicated(root, {}, late)).rejects.toThrow(/late\.sock exists/);
+    expect(late.spawned).toEqual([]); expect(existsSync(paths.state)).toBe(false);
+
+    expect(resolveCliSocketPath({ HOME: '' })).toBe(join(userInfo().homedir, '.obsidian-cli.sock'));
+    expect(resolveCliSocketPath({})).toBe(join(userInfo().homedir, '.obsidian-cli.sock'));
+    expect(resolveCliSocketPath({ HOME: '/Users/h' })).toBe('/Users/h/.obsidian-cli.sock');
+  });
+  it('quit lstats the CLI socket before/after and warns (never touching it) when one existed right before quit', async () => {
+    const { root, paths } = setup();
+    const socket = join(root, 'user.sock'); writeFileSync(socket, 'user');
+    const system = fakeSystem({ alive: [4242], commands: { 4242: `/A/Obsidian --user-data-dir=${paths.profile}` } });
+    system.cliSocketPath = socket; const warnings = []; system.warn = (message) => warnings.push(message);
+    writeState(root, { pid: 4242, profile: paths.profile, port: 9222, startedAt: '2026-10-02T00:00:00.000Z' });
+    const result = await quitDedicated(root, system);
+    expect(result.cliSocket).toMatchObject({ path: socket, existedBeforeQuit: true, existsAfterQuit: true });
+    expect(result.cliSocket.warning).toMatch(/restart your Obsidian/); expect(warnings).toHaveLength(1);
+    expect(readFileSync(socket, 'utf8')).toBe('user');
+    const quiet = setup(); const absent = fakeSystem({ alive: [4242], commands: { 4242: `/A/Obsidian --user-data-dir=${quiet.paths.profile}` } });
+    absent.warn = (message) => warnings.push(message);
+    writeState(quiet.root, { pid: 4242, profile: quiet.paths.profile, port: 9222, startedAt: '2026-10-02T00:00:00.000Z' });
+    expect((await quitDedicated(quiet.root, absent)).cliSocket).toMatchObject({ existedBeforeQuit: false });
+    expect(warnings).toHaveLength(1);
   });
   it('launch reports an asynchronous spawn failure without an unhandled error event', async () => {
     const { root, paths, source } = setup(); writeFileSync(join(source, 'obsidian-1.14.3.asar'), 'asar');
