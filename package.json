@@ -2,7 +2,7 @@
   "name": "kioku",
   "version": "0.0.1",
   "private": true,
-  "description": "Kioku M0 startup foundation for Obsidian desktop; flashcards are not implemented.",
+  "description": "Kioku M1 for Obsidian desktop: review and adopt explicit Q/A from notes; decks, review sessions and AI are not implemented.",
   "license": "MIT",
   "type": "module",
   "engines": { "node": "22.22.3" },

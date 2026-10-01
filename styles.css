@@ -15,3 +15,68 @@
 .kioku-startup-modal .kioku-startup-close {
   margin-top: var(--size-4-2);
 }
+
+.kioku-startup-modal .kioku-startup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-2);
+}
+
+.kioku-candidate-modal {
+  width: min(48rem, 92vw);
+}
+
+.kioku-candidate-modal .kioku-candidate-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-3);
+  max-height: 65vh;
+  overflow-y: auto;
+}
+
+.kioku-candidate-modal .kioku-candidate {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  padding: var(--size-4-3);
+}
+
+.kioku-candidate-modal .kioku-candidate-meta,
+.kioku-candidate-modal .kioku-candidate-label {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.kioku-candidate-modal .kioku-candidate-warning,
+.kioku-candidate-modal .kioku-candidate-message {
+  color: var(--text-warning);
+  font-size: var(--font-ui-small);
+}
+
+.kioku-candidate-modal .kioku-candidate-source,
+.kioku-candidate-modal .kioku-candidate-card {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--background-secondary);
+  padding: var(--size-4-2);
+  border-radius: var(--radius-s);
+}
+
+.kioku-candidate-modal .kioku-candidate-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-2-2);
+  margin-top: var(--size-4-2);
+}
+
+.kioku-candidate-modal .kioku-candidate-field textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+.kioku-candidate-modal .kioku-candidate-actions,
+.kioku-candidate-modal .kioku-candidate-footer {
+  display: flex;
+  gap: var(--size-4-2);
+  justify-content: flex-end;
+  margin-top: var(--size-4-2);
+}

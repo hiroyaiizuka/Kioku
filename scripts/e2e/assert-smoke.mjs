@@ -19,8 +19,8 @@ export function assertNativeTarget(state, expectedVault) {
 
 export function assertStartup(state, expected) {
   if (!state || state.count !== 1 || state.buildId !== expected.buildId || state.version !== expected.version
-      || !state.text.includes('Kioku') || !state.text.includes('未実装') || !state.text.includes('M0')) {
-    throw new Error('Actual Kioku M0 modal absent, duplicated, or stale.');
+      || !state.text.includes('Kioku') || !state.text.includes('未実装') || !state.text.includes('デッキ')) {
+    throw new Error('Actual Kioku status modal absent, duplicated, stale, or not stating what is unimplemented.');
   }
   const { x, y, width, height, viewportWidth, viewportHeight } = state;
   if (width <= 0 || height <= 0 || x < 0 || y < 0 || x + width > viewportWidth + 2 || y + height > viewportHeight + 2

@@ -7,7 +7,7 @@
 | metadata | `npm run validate` | ID/name/desktop/version、lock、固定 deps、文書、LICENSE |
 | lint | `npm run lint` | 公式 `eslint-plugin-obsidianmd` recommended、runtime の Node 禁止、JSON/Node script |
 | type | `npm run typecheck` | strict、unchecked index、override、unused |
-| test | `npm test` | modal honesty/lifecycle・ノート I/O 禁止の変異検査、fixture containment、prepare/update preservation、hash/enablement、ノート不変の非UI検査 |
+| test | `npm test` | 状態 modal の honesty/lifecycle・起動時ノート I/O 禁止の変異検査、M1 の parser/除外/ID/重複/採用照合、Editor・`Vault.process` 書き込み経路の mock 検査（実機ではない）、fixture containment、prepare/update preservation、hash/enablement、ノート不変の非UI検査 |
 | build/package | `npm run build && npm run package` | 共通 recipe の browser production bundle、現入力から write:false で再生成した期待 bytes/imports と4配布物を比較。dist の自己申告 hash だけでは認定しない |
 | all | `npm run check` | 上記を順に実行。実機は起動しない |
 
@@ -38,3 +38,18 @@ baseline の対象は Markdown・Excalidraw・添付を含む全内容ファイ�
 `tests/e2e/note-preservation.test.mjs` は script を CDP **プロトコル模擬**で検査する非UI回帰ケース。模擬 run の PASS/画像は実機証跡ではない。通常の実機 smoke は native Obsidian だけで実行する。
 
 desktop restart は script 自身がアプリを終了/起動しないため、担当が restart 後に **同じ KIOKU_BASELINE_ID** でもう一度 smoke を実行し、2 run の証跡を関連付ける。restart 前に baseline を採り直さない。単独 run の record は restart を `NOT TESTED` と明記する。実機を起動していない開発ワーカーは PASS を報告してはならない。
+
+## M1 実機確認（LEV-275、testing agent が実施）
+
+`npm run check` と mock テストは書き込み経路の契約を固定するだけで、実機成功ではない。M1 の UI/保存経路は専用 Vault の Obsidian desktop で次を確認し、操作前後のノート bytes（または diff）と screenshot を `artifacts/` に残す。本番 Vault は使わない。
+
+1. 状態 modal（ribbon）が実装済み範囲とデッキ・復習・AI 未実装を表示し、開閉だけでノートが変わらない（既存 smoke）。
+2. 日本語の Q/A（`Q:`/`A:`、`問：`/`答：`、全角コロン、複数行の答え）を含むノートでコマンド「開いているノート・選択範囲から Q/A 候補を抽出」→ 中央ポップアップに原文と編集欄が出る。選択範囲ありでは重なるブロックだけ。
+3. 破棄・閉じる・Escape ではノート bytes が変わらない。採用では対象ブロック最終行末に ` ^kioku-…` だけが増え、編集した場合だけ直後に `%%kioku-edit:…%%` が増える。Reading view で ID と編集記録が見えない。
+4. 同名見出しの下に同じ Q/A がある場合、選んだ方だけに ID が付く。
+5. 採用直後の Undo で採用前の bytes に戻り、Redo で再び付く（1採用 = 1 Undo）。
+6. 同じノートを2ペイン（Source/Live Preview と Reading を含む）で開き、採用が両方に反映され二重に付かない。
+7. ポップアップを開いたまま外部（別エディタ等）で対象原文を変更 → 採用は書き込まず理由を Notice 表示する。
+8. ファイルメニュー「Kioku：Q/A 候補を抽出」で閉じたノートから採用 → `Vault.process` 経路で同じ結果になる。
+9. コードブロック内、`%%` 内、Excalidraw ノート（`# Excalidraw Data` 以降・`## Drawing`）の Q/A が候補に出ず、それらの bytes が変わらない。
+10. 再抽出で採用済みが「採用済み」と表示され、採用ボタンが出ない。

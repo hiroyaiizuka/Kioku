@@ -51,6 +51,7 @@ M1 は「開いているノート（または選択範囲）に人が書いた�
 
 - Obsidian の block ID 構文なので Reading view では非表示、Live Preview では控えめに表示され、`[[ノート#^kioku-…]]` で参照できる。M2 は metadataCache の block 情報か同じ parser でカードを辿れる。
 - ID は `kioku-` + `[0-9a-z]` 10文字。`crypto.getRandomValues` と rejection sampling で生成し（36^10 通り）、同じノート内の既存 `^kioku-` ID と衝突すれば作り直す。内容ハッシュではないため、採用後に問い/答えを編集しても同一カードのまま。
+- Q/A ブロック同士が空行なしで続く（Markdown 上は1段落）場合、途中の ID は Obsidian の block ID として扱われず Reading view に文字列として見える可能性がある。原文の段落構造を変えないため Kioku は空行を挿入しない。Kioku 自身の parser は行単位なので採用状態の判定には影響しない（README では空行区切りを推奨し、実機で確認する）。
 - 最終行が既に別の block ID（`^foo`）で終わるブロックは、1ブロック1 ID の制約で印を付けられないため「採用不可（既存 block ID）」と表示し書き込まない。
 
 ポップアップで問い/答えを編集して採用した場合も原文は保持し、ID 追記に加えて直後に空行と Obsidian comment の編集記録を挿入する（Reading view では非表示）。
