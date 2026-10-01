@@ -1,4 +1,5 @@
 import { generateCardId, type RandomBytes } from './card-id';
+import { REASONS } from './reasons';
 import { detectEol, splitLines } from './lines';
 import { EDIT_RECORD_PREFIX, existingCardIds, extractCandidates, findBlocks, type Candidate, type CardText } from './parser';
 
@@ -26,19 +27,19 @@ function serializeCard(card: CardText, eol: string): string {
  * The record must parse back to exactly the same Q/A with Kioku's own parser.
  */
 export function validateEdit(card: CardText): string | null {
-  if (!card.question) return '問いが空です。';
-  if (!card.answer) return '答えが空です。';
+  if (!card.question) return REASONS.emptyQuestion;
+  if (!card.answer) return REASONS.emptyAnswer;
   const joined = `${card.question}\n${card.answer}`;
-  if (joined.includes('%%')) return '「%%」は編集記録に含められません。';
-  if (/\^kioku-/.test(joined)) return '「^kioku-」は編集記録に含められません。';
-  if (joined.split('\n').some((line) => /^\s*(?:`{3,}|~{3,})/.test(line))) return 'コードブロックの区切り（``` や ~~~）は編集記録に含められません。';
-  if (joined.includes('$$')) return '「$$」は編集記録に含められません。';
-  if (joined.includes('<!--') || joined.includes('-->')) return 'HTML コメントは編集記録に含められません。';
+  if (joined.includes('%%')) return REASONS.editPercent;
+  if (/\^kioku-/.test(joined)) return REASONS.editCardId;
+  if (joined.split('\n').some((line) => /^\s*(?:`{3,}|~{3,})/.test(line))) return REASONS.editFence;
+  if (joined.includes('$$')) return REASONS.editMath;
+  if (joined.includes('<!--') || joined.includes('-->')) return REASONS.editHtmlComment;
   const lines = splitLines(serializeCard(card, '\n'));
   const parsed = findBlocks(lines, lines.map(() => null));
   const only = parsed[0];
   if (parsed.length !== 1 || !only || only.question !== card.question || only.answer !== card.answer) {
-    return '空行・見出し・行頭の問い/答えの印（Q: や A: など）を含む編集は保存できません。';
+    return REASONS.editStructure;
   }
   return null;
 }
@@ -52,12 +53,10 @@ function locate(candidates: readonly Candidate[], recorded: RecordedCandidate): 
   const target = matches.find((item) => item.start === recorded.start)
     ?? (matches.length === 1 ? matches[0] : undefined);
   if (!target) {
-    return matches.length > 1
-      ? '同じ原文が複数あり、位置を特定できません（外部で変更された可能性があります）。'
-      : '原文が抽出後に変更されています。もう一度抽出してください。';
+    return matches.length > 1 ? REASONS.ambiguous : REASONS.sourceChanged;
   }
-  if (target.status === 'adopted' || target.status === 'duplicate-id') return 'この問い・答えは既に採用済みです。';
-  if (target.status === 'foreign-block-id') return '既存の block ID があるため採用できません。';
+  if (target.status === 'adopted' || target.status === 'duplicate-id') return REASONS.alreadyAdopted;
+  if (target.status === 'foreign-block-id') return REASONS.foreignBlockId;
   return target;
 }
 

@@ -1,5 +1,6 @@
 import { Modal, Notice, type App } from 'obsidian';
 import { normalizeField, type RecordedCandidate } from '../cards/adoption';
+import { PENDING_CLOSED_NOTICE, REASONS, lostInline, lostNotice, refusalInline, refusalNotice } from '../cards/reasons';
 import type { Candidate, CardText } from '../cards/parser';
 import { errorMessage, type AdoptResult, type Confirmation } from '../cards/writer';
 
@@ -73,7 +74,7 @@ export class CandidateModal extends Modal {
   override onClose(): void {
     // A write may already be on disk but unconfirmed: say so once instead of staying silent.
     if (!this.silent && this.busy()) {
-      new Notice('Kioku：保存の確認前に閉じました。もう一度抽出して採用済みか確認してください。');
+      new Notice(PENDING_CLOSED_NOTICE);
     }
     this.shown = false;
     this.lifetime.abort();
@@ -197,7 +198,7 @@ export class CandidateModal extends Modal {
       result = { ok: false, reason: errorMessage(error) };
     }
     if (!result.ok) {
-      this.fail(entry, `保存しませんでした：${result.reason}`, `Kioku：保存しませんでした。${result.reason}`);
+      this.fail(entry, refusalInline(result.reason), refusalNotice(result.reason));
       return;
     }
     entry.state = 'confirming';
@@ -211,8 +212,7 @@ export class CandidateModal extends Modal {
     }
     if (confirmation === 'cancelled') return;
     if (confirmation === 'lost') {
-      const reason = '保存後に ID が見つかりません。別の画面の保存で上書きされた可能性があります。もう一度抽出してください。';
-      this.fail(entry, `採用を確認できませんでした：${reason}`, `Kioku：採用を確認できませんでした。${reason}`);
+      this.fail(entry, lostInline(REASONS.lostAfterWrite), lostNotice(REASONS.lostAfterWrite));
       return;
     }
     entry.state = 'adopted';

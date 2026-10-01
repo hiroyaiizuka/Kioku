@@ -293,7 +293,7 @@ describe('adoption through the open editor', () => {
 
 describe('open Canvas embeds (pre-write guard)', () => {
   const canvas = (nodes) => JSON.stringify({ nodes, edges: [] });
-  const EMBEDDED = 'このノートは開いている Canvas（board.canvas）に埋め込まれているため保存しませんでした。Canvas を閉じてから採用してください。';
+  const EMBEDDED = 'このノートは開いている Canvas（board.canvas）に埋め込まれています。Canvas を閉じてから採用してください。';
 
   for (const mode of ['preview', 'source']) {
     it(`refuses without writing when an open Canvas embeds the note (${mode})`, async () => {
@@ -333,7 +333,7 @@ describe('open Canvas embeds (pre-write guard)', () => {
     const { app, plugin, file } = openNote(NOTE, { mode: 'preview', canvases: { 'board.canvas': '{broken' } });
     extractCommand(plugin).checkCallback(false); await flush();
     await click(card(0).querySelector('.kioku-candidate-adopt'));
-    expect(notices[0]).toMatch(/^Kioku：保存しませんでした。開いている Canvas（board\.canvas）を確認できなかったため保存しませんでした（/);
+    expect(notices[0]).toMatch(/^Kioku：保存しませんでした。開いている Canvas（board\.canvas）を確認できません（.+）。Canvas を閉じてから採用してください。$/);
     expect(app.files[file.path]).toBe(NOTE);
   });
 });

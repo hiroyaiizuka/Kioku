@@ -1,6 +1,7 @@
 import { MarkdownView, TFile, type App } from 'obsidian';
 import { planAdoption, type RecordedCandidate } from './adoption';
 import { extractCandidates, type CardText } from './parser';
+import { REASONS, canvasEmbeds, canvasUnreadable, writeFailed } from './reasons';
 
 export type AdoptResult =
   | { readonly ok: true; readonly cardId: string; readonly offset: number; readonly inserted: number;
@@ -32,7 +33,7 @@ export function errorMessage(error: unknown): string {
   return typeof message === 'string' ? message : String(error);
 }
 
-const UNCONFIRMED = '書き込みを確認できませんでした。ノートを開いて ID が付いたか確認してください。';
+const UNCONFIRMED = REASONS.unconfirmedWrite;
 
 /**
  * Adopts one candidate. Called only from the adopt button. The original text is verified
@@ -70,7 +71,7 @@ export async function adoptCandidate(app: App, file: TFile, recorded: RecordedCa
       return plan.next;
     });
   } catch (error) {
-    return { ok: false, reason: `ノートを書き換えられませんでした（${errorMessage(error)}）。` };
+    return { ok: false, reason: writeFailed(errorMessage(error)) };
   }
   if (result.ok && written !== expected) return { ok: false, reason: UNCONFIRMED };
   return result;
@@ -95,10 +96,10 @@ export async function openCanvasEmbedding(app: App, file: TFile): Promise<string
     try {
       nodes = (JSON.parse(await app.vault.cachedRead(canvasFile)) as { nodes?: unknown }).nodes;
     } catch (error) {
-      return `開いている Canvas（${canvasFile.path}）を確認できなかったため保存しませんでした（${errorMessage(error)}）。Canvas を閉じてから採用してください。`;
+      return canvasUnreadable(canvasFile.path, errorMessage(error));
     }
     if (Array.isArray(nodes) && nodes.some((node: CanvasNode) => node.type === 'file' && node.file === file.path)) {
-      return `このノートは開いている Canvas（${canvasFile.path}）に埋め込まれているため保存しませんでした。Canvas を閉じてから採用してください。`;
+      return canvasEmbeds(canvasFile.path);
     }
   }
   return null;
