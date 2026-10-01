@@ -2,7 +2,8 @@
 // The user's own Obsidian keeps running: Electron's single-instance lock is per --user-data-dir, so this
 // instance uses a profile inside the project and is identified/terminated only by its recorded PID.
 import { spawn, spawnSync } from 'node:child_process';
-import { accessSync, closeSync, constants, lstatSync, openSync, readdirSync, readFileSync, statSync, unlinkSync } from 'node:fs';
+import { accessSync, closeSync, constants, lstatSync, openSync, readdirSync, readFileSync, statSync, unlinkSync,
+  writeFileSync } from 'node:fs';
 import { connect, createServer } from 'node:net';
 import { userInfo } from 'node:os';
 import { isAbsolute, join, normalize } from 'node:path';
@@ -251,11 +252,31 @@ export async function assertDedicatedStopped(root, ports, system = defaultSystem
   return { dedicatedInstance: 'not-running', checkedPorts: checked, staleRecord: recorded.reason ?? null };
 }
 
-function childEnvironment(home) {
-  const env = { ...process.env, HOME: home };
-  // ELECTRON_RUN_AS_NODE etc. would change what the binary does; NODE_OPTIONS must not leak into Electron.
-  for (const key of Object.keys(env)) if (key.startsWith('ELECTRON_') || key === 'NODE_OPTIONS') delete env[key];
-  return env;
+/** Environment for the dedicated child: private HOME; ELECTRON_* (e.g. ELECTRON_RUN_AS_NODE) and NODE_OPTIONS removed. */
+export function childEnvironment(env, home) {
+  const result = { ...env, HOME: home };
+  for (const key of Object.keys(result)) if (key.startsWith('ELECTRON_') || key === 'NODE_OPTIONS') delete result[key];
+  return result;
+}
+
+/** Exclusive launch lock holding the launcher PID; a lock whose owner PID is dead (e.g. Ctrl-C) is stale. */
+function acquireLaunchLock(root, paths, system) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    safePath(root, paths.lock, 'file', true);
+    try {
+      const fd = openSync(paths.lock, 'wx', 0o600);
+      try { writeFileSync(fd, `${system.pid ?? process.pid}\n`); } finally { closeSync(fd); }
+      return;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
+    const owner = safeRead(root, paths.lock).toString('utf8').trim();
+    if (!/^\d+$/u.test(owner) || isAlive(Number(owner), system)) {
+      throw new Error(`Another harness:launch (pid ${owner || 'unknown'}) holds ${paths.lock}. If none is running, delete that file and retry.`);
+    }
+    unlinkSync(paths.lock); // Stale: its owner is gone.
+  }
+  throw new Error(`Could not acquire ${paths.lock}.`);
 }
 
 /**
@@ -266,15 +287,8 @@ export async function launchDedicated(root, env = process.env, system = defaultS
   assertSupported(system.platform);
   const paths = instancePaths(root);
   ensureDirectory(root, paths.tooling);
-  safePath(root, paths.lock, 'file', true);
   // Exclusive launch lock: overlapping launches must not overwrite / clear each other's record.
-  try { closeSync(openSync(paths.lock, 'wx', 0o600)); }
-  catch (error) {
-    if (error.code === 'EEXIST') {
-      throw new Error(`Another harness:launch holds ${paths.lock}. If none is running, delete that file and retry.`);
-    }
-    throw error;
-  }
+  acquireLaunchLock(root, paths, system);
   try { return await launchLocked(root, env, system, paths); }
   finally { if (safePath(root, paths.lock, 'file', true)) unlinkSync(paths.lock); }
 }
@@ -300,10 +314,14 @@ async function launchLocked(root, env, system, paths) {
   try {
     safePath(root, paths.log, 'file');
     child = system.spawn(executable, [profileFlag(paths.profile), `--remote-debugging-port=${port}`, '--remote-debugging-address=127.0.0.1'],
-      { detached: true, stdio: ['ignore', log, log], env: childEnvironment(paths.home), cwd: paths.home });
+      { detached: true, stdio: ['ignore', log, log], env: childEnvironment(env, paths.home), cwd: paths.home });
   } finally { closeSync(log); }
-  if (!Number.isSafeInteger(child?.pid)) throw new Error(`Failed to start ${executable}; see ${paths.log}.`);
-  child.on?.('error', () => {});
+  // Register before the pid check: a failed spawn emits 'error' asynchronously and must not crash the CLI.
+  let spawnError = null;
+  child?.on?.('error', (error) => { spawnError = error; });
+  if (!Number.isSafeInteger(child?.pid)) {
+    throw new Error(`Failed to start ${executable}${spawnError ? ` (${spawnError.message})` : ''}; see ${paths.log}.`);
+  }
   child.unref?.();
   const startedAt = system.now().toISOString();
   writeState(root, { pid: child.pid, profile: paths.profile, port, startedAt, executable, version: profile.version,
@@ -329,9 +347,18 @@ async function launchLocked(root, env, system, paths) {
 export async function quitDedicated(root, system = defaultSystem, timeoutMs = 20000) {
   const paths = instancePaths(root);
   const recorded = recordedInstance(root, system);
-  if (!recorded.state) return { status: 'NOT_RUNNING', message: 'No recorded dedicated instance; nothing was signalled.' };
   if (!recorded.running) {
-    clearState(root);
+    // E.g. Obsidian's own app.relaunch(): the recorded PID is gone but a new process uses the dedicated profile.
+    // Never signal an unrecorded PID automatically; list verified command lines for the manual procedure.
+    const strays = profileProcesses(paths.profile, system);
+    if (recorded.state) clearState(root);
+    if (strays.length) {
+      const lines = strays.map((stray) => `  ${stray} ${commandOf(stray, system)}`).join('\n');
+      throw new Error(`No running recorded instance, but unrecorded processes use the dedicated profile; nothing was signalled.\n${lines}\n`
+        + 'Manual stop (see docs/harness.md): kill only a PID whose command line contains exactly '
+        + `${profileFlag(paths.profile)}.`);
+    }
+    if (!recorded.state) return { status: 'NOT_RUNNING', message: 'No recorded dedicated instance; nothing was signalled.' };
     return { status: 'NOT_RUNNING', pid: recorded.state.pid, message: `${recorded.reason}; nothing was signalled. State cleared.` };
   }
   const { pid } = recorded.state;

@@ -1,12 +1,13 @@
 // Dedicated-instance tooling with fake process/ps/spawn/CDP. Never starts Obsidian and never signals a real process.
 import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, createFixture } from '../helpers/fixture.mjs';
 import { prepareVault } from '../../scripts/lib/harness.mjs';
 import { restrictedModeAction } from '../../scripts/lib/dedicated-cdp.mjs';
-import { assertDedicatedStopped, compareVersions, defaultAsarSourceDir, instancePaths, launchDedicated, ownsProfile,
+import { assertDedicatedStopped, childEnvironment, compareVersions, defaultAsarSourceDir, instancePaths, launchDedicated, ownsProfile,
   portInUse, prepareProfile, quitDedicated, readState, resolveExecutable, resolvePort, selectAsar, vaultId,
   writeState } from '../../scripts/lib/obsidian-instance.mjs';
 
@@ -189,14 +190,17 @@ describe('dedicated Obsidian process control (fake process table)', () => {
   it('launch executes the binary with the dedicated profile, loopback CDP and private HOME, and records the PID', async () => {
     const { root, expected, paths, source } = setup(); writeFileSync(join(source, 'obsidian-1.14.3.asar'), 'asar');
     const system = fakeSystem({ source });
-    const result = await launchDedicated(root, { KIOKU_CDP_PORT: '9333' }, system);
+    const env = { KIOKU_CDP_PORT: '9333', ELECTRON_RUN_AS_NODE: '1', ELECTRON_ENABLE_LOGGING: '1', NODE_OPTIONS: '--inspect',
+      HOME: '/Users/me', PATH: '/usr/bin' };
+    const result = await launchDedicated(root, env, system);
     expect(result).toMatchObject({ status: 'LAUNCHED', pid: 4242, version: '1.14.3', port: 9333, vault: expected.vault });
     const [{ executable, args, options }] = system.spawned;
     expect(executable).toBe(system.executable);
     expect(args).toEqual([`--user-data-dir=${paths.profile}`, '--remote-debugging-port=9333', '--remote-debugging-address=127.0.0.1']);
     expect(options).toMatchObject({ detached: true, cwd: paths.home });
-    expect(options.env.HOME).toBe(paths.home);
-    expect(Object.keys(options.env).filter((key) => key.startsWith('ELECTRON_') || key === 'NODE_OPTIONS')).toEqual([]);
+    expect(options.env).toEqual({ KIOKU_CDP_PORT: '9333', HOME: paths.home, PATH: '/usr/bin' }); // From the passed env only.
+    expect(childEnvironment({ ELECTRON_RUN_AS_NODE: '1', NODE_OPTIONS: 'x', ELECTRONX: 'kept', HOME: '/h' }, '/d'))
+      .toEqual({ ELECTRONX: 'kept', HOME: '/d' });
     expect(readState(root)).toMatchObject({ pid: 4242, profile: paths.profile, port: 9333, startedAt: '2026-10-02T00:00:00.000Z' });
     expect(existsSync(paths.log)).toBe(true);
   });
@@ -211,6 +215,37 @@ describe('dedicated Obsidian process control (fake process table)', () => {
     system.waitForDedicatedPage = async () => { throw new Error('Timed out.'); };
     await expect(launchDedicated(other.root, {}, system)).rejects.toThrow(/Timed out.*harness:quit/);
     expect(readState(other.root).pid).toBe(4242); expect(existsSync(other.paths.lock)).toBe(false);
+  });
+  it('launch recovers a stale lock whose owner PID is dead, but not one held by a live PID', async () => {
+    const { root, paths, source } = setup(); writeFileSync(join(source, 'obsidian-1.14.3.asar'), 'asar');
+    mkdirSync(paths.tooling); writeFileSync(paths.lock, '999999\n');
+    const live = fakeSystem({ source, alive: [999999] });
+    await expect(launchDedicated(root, {}, live)).rejects.toThrow(/pid 999999\) holds/);
+    expect(live.spawned).toEqual([]);
+    const system = fakeSystem({ source });
+    expect(await launchDedicated(root, {}, system)).toMatchObject({ status: 'LAUNCHED' });
+    expect(existsSync(paths.lock)).toBe(false);
+  });
+  it('launch reports an asynchronous spawn failure without an unhandled error event', async () => {
+    const { root, paths, source } = setup(); writeFileSync(join(source, 'obsidian-1.14.3.asar'), 'asar');
+    const system = fakeSystem({ source });
+    system.spawn = () => {
+      const child = new EventEmitter();
+      process.nextTick(() => child.emit('error', Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' })));
+      return child;
+    };
+    await expect(launchDedicated(root, {}, system)).rejects.toThrow(/Failed to start/);
+    await new Promise((resolve) => setImmediate(resolve)); // The async 'error' fires here and must be handled.
+    expect(existsSync(paths.state)).toBe(false); expect(existsSync(paths.lock)).toBe(false);
+  });
+  it('quit fails, listing verified command lines, when an unrecorded process uses the profile (e.g. app.relaunch)', async () => {
+    const { root, paths } = setup();
+    const command = `/A/Obsidian --user-data-dir=${paths.profile} --remote-debugging-port=9222`;
+    const system = fakeSystem({ alive: [5151], commands: { 5151: command }, list: `  5151 ${command}\n  300 /Applications/Obsidian.app/Contents/MacOS/Obsidian\n` });
+    writeState(root, { pid: 4242, profile: paths.profile, port: 9222, startedAt: '2026-10-02T00:00:00.000Z' });
+    await expect(quitDedicated(root, system)).rejects.toThrow(new RegExp(`nothing was signalled[\\s\\S]*5151 ${command.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}`));
+    expect(system.signals).toEqual([]); expect(existsSync(paths.state)).toBe(false);
+    await expect(quitDedicated(root, system)).rejects.toThrow(/5151/); // Also without any record.
   });
   it('launch keeps no record when the new process exits before its page appears', async () => {
     const { root, paths, source } = setup(); writeFileSync(join(source, 'obsidian-1.14.3.asar'), 'asar');

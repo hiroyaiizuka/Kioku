@@ -81,7 +81,7 @@ export function restrictedModeAction(state, waitedLongEnough) {
 }
 
 /** Turn restricted mode off for the dedicated profile only, then prove only Kioku is loaded and no modal remains. */
-export async function enableCommunityPlugins({ target, timeoutMs = 10000 }) {
+export async function enableCommunityPlugins({ target, timeoutMs = 10000, verifyTimeoutMs = 5000 }) {
   const client = new CDP(target.webSocketDebuggerUrl);
   await client.connect();
   try {
@@ -98,7 +98,7 @@ export async function enableCommunityPlugins({ target, timeoutMs = 10000 }) {
     if (action === 'enable-and-close-trust' || action === 'close-trust') {
       await client.pressEscape(); // The dialog's cancel path only closes it; the choice was already stored above.
     }
-    const verifyEnd = Date.now() + 5000;
+    const verifyEnd = Date.now() + verifyTimeoutMs;
     let verified;
     while (Date.now() < verifyEnd) {
       verified = await client.value(`JSON.stringify({ enabled: app.plugins.isEnabled(), loaded: Object.keys(app.plugins.plugins).sort(),

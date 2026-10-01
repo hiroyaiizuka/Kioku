@@ -55,6 +55,9 @@ try {
   const endpoint = cdpEndpoint();
   report.endpoint = endpoint.href;
   report.dedicatedInstance = readState(root); // Recorded by harness:launch (null when started otherwise).
+  if (report.dedicatedInstance && report.dedicatedInstance.port !== Number(endpoint.port)) {
+    throw new Error(`CDP endpoint port ${endpoint.port} is not the recorded dedicated instance port ${report.dedicatedInstance.port}.`);
+  }
   const targets = await fetch(new URL('/json/list', endpoint)).then((response) => {
     if (!response.ok) throw new Error(`CDP target list returned ${response.status}.`); return response.json();
   });
