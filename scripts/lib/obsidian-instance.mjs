@@ -409,7 +409,7 @@ async function launchLocked(root, env, system, paths) {
   }
   // Page ready: the dedicated instance has replaced the socket by now. Record its inode so quit can tell whether
   // someone else (likely the user's Obsidian) recreated it later. lstat only.
-  const identity = socketIdentity(socket);
+  const identity = (system.socketIdentity ?? socketIdentity)(socket);
   writeState(root, { ...state, cliSocket: { path: socket, ...(identity ?? {}) } });
   const restrictedMode = await system.enableCommunityPlugins({ port, target: page.target });
   return { status: 'LAUNCHED', pid: child.pid, version: page.state.version, port, startedAt, profile: paths.profile,
@@ -487,7 +487,7 @@ export async function quitDedicated(root, system = defaultSystem, timeoutMs = de
   // may remove it (inferred from the 1.14.3 asar).
   const socket = recorded.state.cliSocket?.path ?? system.cliSocketPath ?? resolveCliSocketPath();
   const existedBeforeQuit = socketState(socket);
-  const before = socketIdentity(socket);
+  const before = (system.socketIdentity ?? socketIdentity)(socket);
   const ownIno = recorded.state.cliSocket?.ino;
   const recreatedByOther = before !== null
     && (ownIno === undefined || before.ino !== ownIno || before.dev !== recorded.state.cliSocket?.dev);
