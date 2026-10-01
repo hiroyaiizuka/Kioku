@@ -5,6 +5,10 @@ export const nativeTargetExpression = `JSON.stringify({
   electron: window.process?.versions?.electron ?? ''
 })`;
 
+export function obsidianVersionFromTitle(title) {
+  return /Obsidian (\d+\.\d+\.\d+)$/u.exec(title)?.[1] ?? '';
+}
+
 export function assertNativeTarget(state, expectedVault) {
   if (!state || !/^\d+\.\d+\.\d+$/u.test(state.version) || state.vault !== expectedVault
       || state.url !== 'app://obsidian.md/index.html' || state.processType !== 'renderer'

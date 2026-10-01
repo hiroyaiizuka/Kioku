@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { assertNativeTarget, assertStartup, nativeTargetExpression } from '../../scripts/e2e/assert-smoke.mjs';
+import { assertNativeTarget, assertStartup, nativeTargetExpression,
+  obsidianVersionFromTitle } from '../../scripts/e2e/assert-smoke.mjs';
 
 const expected = { buildId: 'abc', version: '0.0.1' };
 const visible = { count: 1, text: 'Kioku M0 未実装', buildId: 'abc', version: '0.0.1',
@@ -22,5 +23,8 @@ describe('native smoke assertions', () => {
     }
     expect(nativeTargetExpression).toContain('versions?.electron');
     expect(nativeTargetExpression).not.toContain("require?.('obsidian')");
+    expect(obsidianVersionFromTitle('New tab - test-vault - Obsidian 1.13.7')).toBe('1.13.7');
+    expect(obsidianVersionFromTitle('New tab - test-vault - Obsidian v1.13.7')).toBe('');
+    expect(obsidianVersionFromTitle('test-vault - Obsidian')).toBe('');
   });
 });

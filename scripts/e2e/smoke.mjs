@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { preflight } from '../lib/harness.mjs';
 import { assertNotesUnchanged, captureNoteBaseline, loadNoteBaseline } from '../lib/note-baseline.mjs';
 import { atomicWrite, ensureDirectory, projectRoot } from '../lib/paths.mjs';
-import { assertNativeTarget, assertStartup, nativeTargetExpression } from './assert-smoke.mjs';
+import { assertNativeTarget, assertStartup, nativeTargetExpression,
+  obsidianVersionFromTitle } from './assert-smoke.mjs';
 
 class CDP {
   constructor(url) { this.url = url; this.nextId = 0; this.pending = new Map(); this.errors = []; }
@@ -100,9 +101,11 @@ try {
     const observed = await probe.value(nativeTargetExpression)
       .catch(() => null);
     probe.close();
-    const version = /Obsidian (\d+\.\d+\.\d+)$/u.exec(target.title ?? '')?.[1] ?? '';
+    const version = obsidianVersionFromTitle(target.title ?? '');
     const state = observed ? { ...observed, version } : null;
-    if (state?.vault === expected.vault) { assertNativeTarget(state, expected.vault); candidates.push({ target, state }); }
+    if (state?.vault === expected.vault && state.url === 'app://obsidian.md/index.html') {
+      assertNativeTarget(state, expected.vault); candidates.push({ target, state });
+    }
   }
   if (candidates.length !== 1) throw new Error(`Expected one native dedicated-vault page; found ${candidates.length}.`);
   report.obsidian = candidates[0].state;
