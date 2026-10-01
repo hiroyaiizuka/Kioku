@@ -10,7 +10,7 @@ const nodeOnlyOff = Object.fromEntries(
 );
 
 export default defineConfig(
-  globalIgnores(['node_modules/**', 'dist/**', 'test-vault/**', 'artifacts/**', '.tooling/**', 'coverage/**', 'package-lock.json']),
+  globalIgnores(['.claude/worktrees/**', 'node_modules/**', 'dist/**', 'test-vault/**', 'artifacts/**', '.tooling/**', 'coverage/**', 'package-lock.json']),
   { files: ['src/**/*.ts'], extends: [...obsidianmd.configs.recommended] },
   {
     files: ['src/**/*.ts'],
