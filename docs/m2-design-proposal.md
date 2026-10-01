@@ -21,12 +21,12 @@
 | SR の既定デッキタグは `#flashcards` で、`#flashcards/subdeck/subdeck` のような入れ子にも一致する。タグは「ファイル内で次のタグが現れるまで、その後のすべてのカードに適用」され、カード1行目先頭のタグはそのカード専用。フォルダをデッキにする設定もある。 | [SR Decks](https://www.stephenmwangi.com/obsidian-spaced-repetition/flashcards/decks/) |
 | SR はスケジュールをノート内 HTML コメント `<!--SR:!2024-08-16,51,230-->`（期日, 間隔, ease）で保存し、既定はカード直後の行。単一スケジュールファイルは「計画中」。設定は `data.json`。 | [SR Data Storage](https://stephenmwangi.com/obsidian-spaced-repetition/data-storage/) |
 | SR のアルゴリズムは SM-2 ベースの「SM-2-OSR」で Hard/Good/Easy の3段階。FSRS は「Planned」。復習画面には Skip（`S`）、Space/Enter で答え表示、`1`–`3` で評価。親デッキを選ぶと子デッキを含む。 | [SR Algorithms](https://stephenmwangi.com/obsidian-spaced-repetition/algorithms/), [SR Reviewing](https://stephenmwangi.com/obsidian-spaced-repetition/flashcards/reviewing/) |
-| Anki では FSRS は **opt-in**（デッキオプション下部の FSRS 節で有効化。既定は従来の SM-2 系）。「Next day starts at」の既定は 4AM。新規カードの既定は 1日 20 枚。親デッキを選ぶと子デッキのカードも出る。 | [Anki Deck Options](https://docs.ankiweb.net/deck-options.html), [Anki Preferences](https://docs.ankiweb.net/preferences.html), [Anki Getting Started](https://docs.ankiweb.net/getting-started.html), 20 枚：[LeanAnki](https://leananki.com/best-settings/) |
+| Anki では FSRS は **opt-in**（デッキオプション下部の FSRS 節で有効化。既定は従来の SM-2 系）。「Next day starts at」の既定は 4AM。新規カードの既定は 1日 20 枚。親デッキを選ぶと子デッキのカードも出る。 | [Anki Deck Options](https://docs.ankiweb.net/deck-options.html), [Anki Preferences](https://docs.ankiweb.net/preferences.html), [Anki Getting Started](https://docs.ankiweb.net/getting-started.html), 20 枚：[Anki FAQ: Anki is not showing me all my cards](https://faqs.ankiweb.net/anki-is-not-showing-me-all-my-cards.html) |
 | Obsidian のタグは大文字小文字を区別せず、一般的な Unicode（日本語を含む）を許し、`/` で入れ子。数字だけのタグ（`#1984`）は無効。`tag:inbox` 検索は子タグも含む。 | [Obsidian Tags](https://obsidian.md/help/tags) |
 | Obsidian Sync は `.` で始まるファイル/フォルダを同期しない（`.obsidian` を除く）。対応形式外のファイル（Vault 内の `.json` / `.jsonl` を含む）は「Sync all other types」を ON にしないと同期されない（既定 OFF）。 | [Sync settings](https://obsidian.md/help/sync/settings), [Accepted file formats](https://obsidian.md/help/file-formats) |
-| community plugin のフォルダ（`data.json` を含む）は、Sync の「Installed community plugin list」を ON にした場合だけ同期される（既定 OFF）。 | [Obsidian Forum: Sync – Plugins, settings](https://forum.obsidian.md/t/obsidian-sync-plugins-settings-etc/85504), [Forum: How to start syncing plugin settings](https://forum.obsidian.md/t/how-to-start-syncing-plugin-settings-without-messing-them-up/114447)（フォーラムの証言。公式文書の明記はない） |
+| Sync の「Installed community plugin list」が ON のとき、`.obsidian/plugins/*/data.json` が同期されることがフォーラムの Sync ログで確認できる。OFF（既定）では同期されない見込み【未検証】。公式文書に明記はない。 | [Forum: Obsidian Sync deletes all community plugin settings on first sync](https://forum.obsidian.md/t/obsidian-sync-deletes-all-community-plugin-settings-on-first-sync/48488)（Sync ログに `data.json` の転送が出ている） |
 | Sync の競合解決：Markdown は diff-match-patch でマージ、その他のファイルは「last modified wins」、設定 JSON は「ローカル JSON のキーをリモートの上に適用」してマージ。1.9.7 以降は「Create conflict file」も選べる。 | [Sync troubleshoot](https://obsidian.md/help/sync/troubleshoot) |
-| community plugin のアンインストールはプラグインフォルダ内のファイル（`data.json` を含む）を削除する。 | [Forum: My plugins will not delete #2](https://forum.obsidian.md/t/help-my-plugins-will-not-delete/26552/2), [Forum: Sync deletes all community plugin settings](https://forum.obsidian.md/t/obsidian-sync-deletes-all-community-plugin-settings-on-first-sync/48488)（フォーラムの証言） |
+| community plugin のアンインストールはプラグインフォルダ内のファイル（`data.json` を含む）を削除する。 | [Forum: My plugins will not delete #2](https://forum.obsidian.md/t/help-my-plugins-will-not-delete/26552/2)（フォーラムの証言） |
 | `Plugin.loadData()/saveData()` はプラグインフォルダの `data.json` を読み書きする。`onExternalSettingsChange()` は Sync や外部プログラムが `data.json` を変えたときに呼ばれる。`PluginManifest.dir` はプラグインフォルダの Vault パス。`getAllTags(cache)`、`parseFrontMatterTags(frontmatter)`、`CachedMetadata.tags`（位置付き `TagCache[]`）、`CachedMetadata.blocks`（block ID → `BlockCache`）、`DataAdapter.append`、`Modal.scope` がある。 | `node_modules/obsidian/obsidian.d.ts`（obsidian 1.8.7） |
 | ts-fsrs 5.4.2：MIT、runtime 依存なし、ESM/CJS/UMD 同梱、FSRS-6。`Rating` は Again=1/Hard=2/Good=3/Easy=4（Manual=0）。既定 `request_retention=0.9`、`maximum_interval=36500`、`enable_fuzz=false`、`enable_short_term=true`、learning steps `["1m","10m"]`。`rollback()`・`forget()` あり。browser 向け minify bundle は 21,411 B / gzip 6,768 B（import 範囲で多少変わる）で、`require(`・`process.` を含まない。 | `npm view ts-fsrs`（2026-10-02）、tarball の `dist/index.d.ts` / `dist/index.mjs`、esbuild での実測 |
 | `enable_short_term=false` のとき New カードの初回間隔は Again 1日 / Hard 2日 / Good 3日 / Easy 8日（既定パラメータ）。 | ts-fsrs 5.4.2 を Node で実行して確認 |
@@ -75,7 +75,7 @@
 | X2 同じ ID = 同じカード、1回だけ出題。**有効な問い/答えが異なる場合だけ除外**し両パスを表示 | 内容が同じなら日程を共有して1回出題（表示・「ノートを開く」は先にソートされたパス）。 | 衝突コピーや複製で学習が止まらない。内容が違う本当の衝突だけ利用者に知らせる。 | 内容比較（空白正規化）が要る。 |
 | X3 先に見つかった方を採用 | パス順で1つを採用。 | 単純。 | 別内容でも黙って片方が選ばれる。 |
 
-**推奨案：X2。** ID は M1 が小文字で生成するが、比較は小文字に正規化して行う（手で大文字に書き換えられた場合の取り違え防止）。
+**推奨案：X2。** ID の比較は M1 と同じく**大文字小文字を区別する**（M1 parser は `kioku-` 接頭辞の判定、ID 重複の数え上げ、編集記録 `%%kioku-edit:<id>` との対応付けをすべて区別ありで行う）。M2 だけ正規化すると、M1 では別カード/編集記録なしと扱うものを M2 が同一視して食い違うため、正規化しない。手で大文字に書き換えた ID は M1 でも M2 でも別 ID として扱われ、`KIOKU-` で始まるものは M1 と同じくカードとみなさない（`src/cards/parser.ts` の `startsWith(CARD_ID_PREFIX)`）。
 
 ## 3. 決定 D2：親子デッキと「全デッキ」入口
 
@@ -149,11 +149,11 @@ K1 書き込みなし・このセッションのキューから外す（次の�
 | 案 | 内容 | データ安全性 | 同期・競合 | 性能・サイズ | SR 互換 | コスト / 検証 |
 | --- | --- | --- | --- | --- | --- | --- |
 | S1 ノート内 | カード直後に `%%kioku-srs:…%%` や `<!--SR:…-->` を書き、評価ごとに更新。 | 評価のたびにノートを書き換え、M1 と同じ Canvas ガード・原文照合・**ディスク確認（3 秒 settle、最長 6 秒）と回復（最長 12 秒）**が毎回必要。1枚評価するごとに 3〜12 秒待つことになり、**復習 UI としては成立しない**。確認を省けば M1 で実機確認済みの上書き消失（Canvas・ホバー popover・他ビュー）をそのまま抱える。 | Markdown は diff-match-patch マージで、2端末で同じカードを評価するとコメントが重複/破損しうる。 | ノートの更新日時が学習で変わる。履歴を入れると肥大。 | `<!--SR:` 形式なら SR と相互運用の余地（SM-2 前提）。 | 高。 |
-| S2 プラグインフォルダ | `data.json`（設定のみ、`saveData`）、`state.json`（カード状態）、`history-YYYY.jsonl`（評価の追記、`DataAdapter.append`）を `PluginManifest.dir` に置く。 | ノートに一切書かない。**アンインストール/再インストールで消える**（§1）。壊れた読込を「新規」と誤認して上書きする経路がある（§6.1 で対策）。 | 既定では同期されない＝**端末ごとに別の日程になるが失われない**。「Installed community plugin list」を ON にした場合だけ同期され、`data.json` はキー単位マージ、他ファイルは last modified wins【`state.json` の扱いは未検証】で他端末の評価が失われうる。`onExternalSettingsChange` は検知できても、マージで既に失われたキーは取り戻せない。 | 状態は全体書き直し（数千枚で数百 KB 程度）。履歴は追記のみ。目安 1件 約 80 B × 100 件/日 × 365 日 ≒ 3 MB/年を年ごとのファイルに分割。 | なし。 | 低〜中。公開 API のみで単体テストも容易。 |
+| S2 プラグインフォルダ | `data.json`（設定のみ、`saveData`）、`state.json`（カード状態）、`history-YYYY.jsonl`（評価の追記、`DataAdapter.append`）を `PluginManifest.dir` に置く。 | ノートに一切書かない。**アンインストール/再インストールで消える**（§1）。壊れた読込を「新規」と誤認して上書きする経路がある（§6.1 で対策）。 | 既定では同期されない＝**端末ごとに別の日程になるが失われない**。「Installed community plugin list」を ON にすると同期され（OFF で同期されないことは【未検証】）、`data.json` はキー単位マージ、他ファイルは last modified wins【`state.json` の扱いは未検証】で他端末の評価が失われうる。`onExternalSettingsChange` は検知できても、マージで既に失われたキーは取り戻せない。 | 状態は全体書き直し（1枚あたり 150 B 前後と見て数千枚で数百 KB 程度の見込み【未検証】。実装時に計測）。履歴は追記のみ。目安 1件 約 80 B × 100 件/日 × 365 日 ≒ 3 MB/年を年ごとのファイルに分割。 | なし。 | 低〜中。公開 API のみで単体テストも容易。 |
 | S3 Vault 内の単一ファイル | 例 `Kioku/kioku-data.json`。 | アンインストールで消えない。誤編集・削除されうる。 | `.json` は既定で同期されない（「Sync all other types」OFF）。ON でも last modified wins で他端末の評価が失われる。`.kioku/` 等の隠しフォルダは同期されない。 | 全体書き直し。 | なし。 | 中。 |
-| S4 端末別の追記ログ（Markdown） | 例 `Kioku/log/<device-id>/2026-10.md` に評価イベントを1行ずつ追記し、状態は全ログを時刻順に再生して導出（キャッシュはプラグインフォルダ）。 | 追記のみ。プラグインを消しても残る。 | `.md` なので**既定で同期され**、端末ごとに別ファイルなので diff-merge でも衝突しにくい。2端末の評価は時刻順の再生で決定的に統合。 | 追記は軽い。再生コストは計測が必要【未検証】。月ごとに分割。 | なし。 | 高（device ID、再生規則、破損行）。**検索・グラフ・クイックスイッチャーに出る**（Obsidian の「除外するファイル」設定で隠せるが利用者の操作が要る）。 |
+| S4 端末別の追記ログ | 例 `Kioku/log/<device-id>/2026-10.md` に評価イベントを1行ずつ追記し、状態は全ログを時刻順に再生して導出（キャッシュはプラグインフォルダ）。代案 S4' は同じログを `.md` 以外の拡張子（例 `.kioku-log`）にする。 | 追記のみ。プラグインを消しても残る。ただし `.md` 版は**Vault 内の Markdown ファイルを書く**ので、ログを利用者がエディタ・Canvas・ホバー popover で開いていると、M1 で実機確認した「古いバッファの後保存による上書き」と同じ消失が起こりうる。`DataAdapter.append` は Vault API（`Vault.process` 等）を経由しないため、開いているビューとの整合を取れない。 | `.md` 版は**既定で同期され**、端末ごとに別ファイルなので diff-merge でも衝突しにくい。S4' は「Sync all other types」を ON にしないと同期されない（§1）。2端末の評価は時刻順の再生で決定的に統合。 | 追記は軽い。再生コストは計測が必要【未検証】。月ごとに分割。 | なし。 | 高（device ID、再生規則、破損行、`.md` 版は開いたビューとの整合）。`.md` 版は検索・グラフ・クイックスイッチャーに出る。Obsidian の「除外するファイル」設定でどこまで隠せるかは【未検証】で、いずれにせよ利用者の操作が要る。S4' は Obsidian の一覧に出ない（対応形式外）。 |
 
-S2〜S4 はノートを書かないので、M1 の書き込み機構（Canvas ガード、ディスク確認、回復）は不要。
+S2・S3 はノート（Markdown）を書かないので、M1 の書き込み機構（Canvas ガード、ディスク確認、回復）は不要。S4 の `.md` 版は利用者が開きうる Markdown ファイルを書くため、ログを開かない前提の注記か、M1 と同等の確認が要る（評価ごとに確認を待つと S1 と同じ問題になるため、追記の確認は非同期にし、失われたイベントは次回再生時に欠落として検出する設計が必要）。S4' はこの問題を避けられる代わりに、同期には利用者の設定変更が要る。
 
 **推奨案：複数端末で同期して復習する予定がなければ S2、あるなら S4。** S2 の場合も履歴は追記型イベントとして状態と分けておき、後で S4 へ移せる形にする。
 
@@ -165,7 +165,7 @@ S2〜S4 はノートを書かないので、M1 の書き込み機構（Canvas �
 | 保存途中のクラッシュ・不正な書き込み | 各セッションの最初の保存前に現在の `state.json` を `state.json.bak` に複製する。書き込み後に読み戻して検証する。【未検証】`DataAdapter.write` の原子性は保証されないため、`.bak` からの復元手順を文書化する。 |
 | 古い Kioku が新しい `schemaVersion` を読んで上書き（ダウングレード、別端末の旧版） | 未知の `schemaVersion` は読み取り専用。移行は新しい版だけが行う。 |
 | アンインストール/再インストールで削除 | M2 では防げないことを README とデッキ選択画面の注記に明記する。エクスポート（Vault 内への書き出し）は後続の課題として起票する。 |
-| Sync の JSON マージ・last modified wins | 「Installed community plugin list」ON の利用者には S4 を案内する（§14 C6）。 |
+| Sync の JSON マージ・last modified wins | 「Installed community plugin list」ON の利用者には S4 を案内する（§14 Q6）。 |
 
 その他（推奨）：
 
@@ -189,7 +189,7 @@ S2〜S4 はノートを書かないので、M1 の書き込み機構（Canvas �
 
 ```ts
 // src/review/types.ts（Obsidian 非依存）
-export type CardId = `kioku-${string}`;          // lowercase-normalized
+export type CardId = `kioku-${string}`;          // compared case-sensitively, as in M1
 export type Grade = 'again' | 'hard' | 'good' | 'easy';
 export type CardPhase = 'new' | 'learning' | 'review' | 'relearning';
 export type KiokuDay = string;                     // local "YYYY-MM-DD" after the day-start hour
@@ -318,21 +318,21 @@ export interface DeckNode {
 
 **A. デッキ**
 
-1. **A1 デッキの作り方**：ノートの全タグ（frontmatter を含む。コード・コメント内は除く）をデッキにし、入れ子の親は子を含み、「全デッキ」はデッキの和集合、タグのないカードは件数表示のみ。**推奨：この案。**（代案：`#flashcards` 以下だけ／frontmatter のみ／見出し単位）
-2. **A2 同じ ID が複数ノートにある場合**：同じカードとして1回だけ出題し、内容が異なるときだけ除外して両パスを表示。**推奨：この案。**（代案：常に両方除外）
+1. **Q1 デッキの作り方**：ノートの全タグ（frontmatter を含む。コード・コメント内は除く）をデッキにし、入れ子の親は子を含み、「全デッキ」はデッキの和集合、タグのないカードは件数表示のみ。**推奨：この案。**（代案：`#flashcards` 以下だけ／frontmatter のみ／見出し単位）
+2. **Q2 同じ ID が複数ノートにある場合**：同じカードとして1回だけ出題し、内容が異なるときだけ除外して両パスを表示。**推奨：この案。**（代案：常に両方除外）
 
 **B. 復習**
 
-3. **B3 アルゴリズム**：FSRS（ts-fsrs 5.4.2、初の runtime 依存）、4段階ボタン（キー 1–4）、同日内の再出題なし。**推奨：この案。**（代案：SM-2 自前・3段階・1分/10分ステップ）
-4. **B4 日付と出題数**：日付の切り替えは 4:00（設定可）、New は全デッキ共通で 1日 20 枚、Due は上限なし、ピッカーに Due/New/Total を表示。**推奨：この案。**
-5. **B5 Skip と途中終了**：Skip は `S`、何も保存せずこのセッションから外す。途中で閉じたら評価済みだけ保存、再開機能なし。**推奨：この案。**
+3. **Q3 アルゴリズム**：FSRS（ts-fsrs 5.4.2、初の runtime 依存）、4段階ボタン（キー 1–4）、同日内の再出題なし。**推奨：この案。**（代案：SM-2 自前・3段階・1分/10分ステップ）
+4. **Q4 日付と出題数**：日付の切り替えは 4:00（設定可）、New は全デッキ共通で 1日 20 枚、Due は上限なし、ピッカーに Due/New/Total を表示。**推奨：この案。**
+5. **Q5 Skip と途中終了**：Skip は `S`、何も保存せずこのセッションから外す。途中で閉じたら評価済みだけ保存、再開機能なし。**推奨：この案。**
 
 **C. データ**
 
-6. **C6 複数端末で同じ Vault を同期して復習する予定があるか**：なし → プラグインフォルダ（ノートは書かない）。あり → 端末別の追記ログ（Vault 内 Markdown）。**推奨：予定がなければ前者。**
-7. **C7 データ消失対策を M2 に入れるか**：読めないときは書かない（読み取り専用）、保存前の `.bak`、未知の schemaVersion は読み取り専用。エクスポートは後続。**推奨：入れる。**
-8. **C8 Q/A 編集後**：日程・履歴を保持し、内容ハッシュを記録（リセット UI は後続）。**推奨：この案。**
+6. **Q6 複数端末で同じ Vault を同期して復習する予定があるか**：なし → プラグインフォルダ（ノートは書かない）。あり → 端末別の追記ログ（Vault 内。`.md` なら既定で同期されるが開いたビューによる上書きの危険があり、`.md` 以外なら安全だが「Sync all other types」の ON が必要。§6 S4/S4'）。**推奨：予定がなければ前者。**
+7. **Q7 データ消失対策を M2 に入れるか**：読めないときは書かない（読み取り専用）、保存前の `.bak`、未知の schemaVersion は読み取り専用。エクスポートは後続。**推奨：入れる。**
+8. **Q8 Q/A 編集後**：日程・履歴を保持し、内容ハッシュを記録（リセット UI は後続）。**推奨：この案。**
 
 **D. UI**
 
-9. **D9 ribbon と表示**：ribbon はデッキ選択を開く。状態（build ID）と抽出はコマンド・file-menu・デッキ選択画面のボタンから。smoke を更新する。問い/答えは Markdown で描画（回答前は埋め込みを描画しない）。**推奨：この案。**
+9. **Q9 ribbon と表示**：ribbon はデッキ選択を開く。状態（build ID）と抽出はコマンド・file-menu・デッキ選択画面のボタンから。smoke を更新する。問い/答えは Markdown で描画（回答前は埋め込みを描画しない）。**推奨：この案。**
