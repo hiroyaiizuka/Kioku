@@ -1,0 +1,38 @@
+{
+  "name": "kioku",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Kioku M0 startup foundation for Obsidian desktop; flashcards are not implemented.",
+  "license": "MIT",
+  "type": "module",
+  "engines": { "node": "22.22.3" },
+  "scripts": {
+    "validate": "node scripts/validate.mjs",
+    "lint": "eslint . --max-warnings 0",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "node scripts/build.mjs",
+    "package": "node scripts/validate.mjs --artifacts",
+    "check": "npm run validate && npm run lint && npm run typecheck && npm test && npm run build && npm run package",
+    "harness:prepare": "npm run check && node scripts/harness-cli.mjs prepare",
+    "harness:update": "npm run check && node scripts/harness-cli.mjs update",
+    "harness:preflight": "node scripts/harness-cli.mjs preflight",
+    "harness:e2e:smoke": "node scripts/e2e/smoke.mjs",
+    "hooks:install": "node scripts/install-hooks.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.4",
+    "@eslint/json": "0.14.0",
+    "esbuild": "0.28.2",
+    "eslint": "9.39.4",
+    "eslint-plugin-obsidianmd": "0.4.2",
+    "globals": "17.6.0",
+    "jsdom": "30.0.1",
+    "obsidian": "1.8.7",
+    "typescript": "5.8.3",
+    "typescript-eslint": "8.59.1",
+    "vite": "7.3.6",
+    "vitest": "4.1.11"
+  }
+}

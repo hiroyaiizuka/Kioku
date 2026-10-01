@@ -1,0 +1,9 @@
+{
+  "id": "kioku",
+  "name": "Kioku",
+  "version": "0.0.1",
+  "minAppVersion": "1.8.7",
+  "description": "PC 用の起動確認基盤です。カード作成・保存・復習は未実装です。",
+  "author": "Kioku contributors",
+  "isDesktopOnly": true
+}

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+artifacts/
+test-vault/
+coverage/
+.tooling/
+main.js
+*.log
+.DS_Store
