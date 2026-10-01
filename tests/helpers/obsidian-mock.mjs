@@ -17,8 +17,10 @@ export class MockModal {
   close() { if (this.modalEl.isConnected) { this.onClose(); this.modalEl.remove(); } }
 }
 export class MockMarkdownView {
-  constructor(file, editor, mode = 'source') { this.file = file; this.editor = editor; this.mode = mode; }
+  constructor(file, editor, mode = 'source') { this.file = file; this.editor = editor; this.mode = mode; this.saves = 0; this.onSave = null; }
   getMode() { return this.mode; }
+  /** Public TextFileView.save(): flushes the editor buffer to the file (wired by createApp). */
+  async save() { this.saves += 1; this.onSave?.(this.editor.getValue()); }
 }
 export class MockTFile {
   constructor(path) { this.path = path; this.basename = path.replace(/^.*\//, '').replace(/\.md$/, ''); this.extension = 'md'; }
@@ -81,23 +83,31 @@ export async function compilePlugin(source, notices) {
   }
   const obsidian = { Plugin: MockPlugin, Modal: MockModal, MarkdownView: MockMarkdownView, Notice: MockNotice, TFile: MockTFile };
   const module = { exports: {} };
-  vm.runInNewContext(result.outputFiles[0].text, { module, exports: module.exports, crypto: globalThis.crypto,
+  // Timers resolve globalThis at call time so vitest fake timers control the plugin's window timers.
+  const timers = { setTimeout: (...args) => globalThis.setTimeout(...args), clearTimeout: (id) => globalThis.clearTimeout(id) };
+  vm.runInNewContext(result.outputFiles[0].text, { module, exports: module.exports, crypto: globalThis.crypto, window: timers, AbortController: globalThis.AbortController,
     require: (id) => { if (id === 'obsidian') return obsidian; throw new Error(id); }, console });
   return module.exports.default;
 }
 
 /** An app whose note I/O is observable: views hold editors, closed files live in `files`. */
-export function createApp({ files = {}, views = [], active = null } = {}) {
+export function createApp({ files = {}, views = [], active = null, canvases = [] } = {}) {
   const calls = [];
+  for (const view of views) view.onSave = (text) => { calls.push(`save:${view.file.path}`); files[view.file.path] = text; };
   const app = {
     calls, files,
     workspace: {
       getActiveViewOfType(type) { calls.push('workspace.getActiveViewOfType'); return active instanceof type ? active : null; },
-      getLeavesOfType(type) { calls.push('workspace.getLeavesOfType'); return type === 'markdown' ? views.map((view) => ({ view })) : []; },
+      getLeavesOfType(type) {
+        calls.push(`workspace.getLeavesOfType:${type}`);
+        if (type === 'markdown') return views.map((view) => ({ view }));
+        return type === 'canvas' ? canvases.map((file) => ({ view: { file } })) : [];
+      },
       on(name, callback) { return { name, callback }; },
     },
     vault: {
       async read(file) { calls.push(`vault.read:${file.path}`); return files[file.path]; },
+      async cachedRead(file) { calls.push(`vault.cachedRead:${file.path}`); return files[file.path]; },
       async process(file, fn) { calls.push(`vault.process:${file.path}`); files[file.path] = fn(files[file.path]); return files[file.path]; },
     },
   };

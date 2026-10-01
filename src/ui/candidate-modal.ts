@@ -1,7 +1,7 @@
 import { Modal, Notice, type App } from 'obsidian';
 import { normalizeField, type RecordedCandidate } from '../cards/adoption';
 import type { Candidate, CardText } from '../cards/parser';
-import { errorMessage, type AdoptResult } from '../cards/writer';
+import { errorMessage, type AdoptResult, type Confirmation } from '../cards/writer';
 
 export interface CandidateModalOptions {
   readonly noteName: string;
@@ -9,6 +9,8 @@ export interface CandidateModalOptions {
   readonly candidates: readonly Candidate[];
   /** Writes one adoption. Only the adopt button calls it. */
   readonly adopt: (recorded: RecordedCandidate, edited: CardText) => Promise<AdoptResult>;
+  /** Waits until the adopted ID is confirmed on disk; aborted when the popup closes. */
+  readonly confirm: (cardId: string, signal: AbortSignal) => Promise<Confirmation>;
   readonly onClosed?: () => void;
 }
 
@@ -24,7 +26,8 @@ interface Entry {
   /** Recorded offset, shifted after earlier adoptions in this popup. */
   start: number;
   /** `blocked`: duplicate Kioku ID or a foreign block ID; shown but never adoptable. */
-  state: 'open' | 'saving' | 'adopted' | 'discarded' | 'blocked';
+  /** `confirming`: written, waiting for the ID to be confirmed on disk before showing success. */
+  state: 'open' | 'saving' | 'confirming' | 'adopted' | 'discarded' | 'blocked';
   cardId: string | null;
   /** The text in the edit fields; survives re-rendering and failed writes. */
   draft: CardText;
@@ -37,6 +40,7 @@ interface Entry {
 export class CandidateModal extends Modal {
   private readonly entries: Entry[];
   private shown = false;
+  private readonly lifetime = new AbortController();
 
   constructor(app: App, private readonly options: CandidateModalOptions) {
     super(app);
@@ -58,6 +62,7 @@ export class CandidateModal extends Modal {
 
   override onClose(): void {
     this.shown = false;
+    this.lifetime.abort();
     this.contentEl.empty();
     this.options.onClosed?.();
   }
@@ -123,8 +128,9 @@ export class CandidateModal extends Modal {
     const actions = item.createDiv({ cls: 'kioku-candidate-actions' });
     const adopt = actions.createEl('button', { text: '採用', cls: 'mod-cta kioku-candidate-adopt' });
     const discard = actions.createEl('button', { text: '破棄', cls: 'kioku-candidate-discard' });
-    adopt.disabled = entry.state === 'saving';
-    discard.disabled = entry.state === 'saving';
+    // One adoption at a time: offsets of other cards are only shifted after a confirmed write.
+    adopt.disabled = this.busy();
+    discard.disabled = entry.state !== 'open';
     discard.addEventListener('click', () => {
       if (entry.state !== 'open') return;
       entry.state = 'discarded';
@@ -153,8 +159,19 @@ export class CandidateModal extends Modal {
     area.addEventListener('input', () => update(area.value));
   }
 
+  private busy(): boolean {
+    return this.entries.some((entry) => entry.state === 'saving' || entry.state === 'confirming');
+  }
+
+  private fail(entry: Entry, message: string, notice: string): void {
+    entry.state = 'open';
+    entry.message = message;
+    new Notice(notice);
+    this.render();
+  }
+
   private async adopt(entry: Entry): Promise<void> {
-    if (entry.state !== 'open') return;
+    if (entry.state !== 'open' || this.busy()) return;
     entry.state = 'saving';
     entry.message = '保存しています…';
     this.render();
@@ -166,10 +183,22 @@ export class CandidateModal extends Modal {
       result = { ok: false, reason: errorMessage(error) };
     }
     if (!result.ok) {
-      entry.state = 'open';
-      entry.message = `保存しませんでした：${result.reason}`;
-      new Notice(`Kioku：保存しませんでした。${result.reason}`);
-      this.render();
+      this.fail(entry, `保存しませんでした：${result.reason}`, `Kioku：保存しませんでした。${result.reason}`);
+      return;
+    }
+    entry.state = 'confirming';
+    entry.message = '保存を確認しています…';
+    this.render();
+    let confirmation: Confirmation;
+    try {
+      confirmation = await this.options.confirm(result.cardId, this.lifetime.signal);
+    } catch {
+      confirmation = 'lost';
+    }
+    if (confirmation === 'cancelled') return;
+    if (confirmation === 'lost') {
+      const reason = '保存後に ID が見つかりません。別の画面の保存で上書きされた可能性があります。もう一度抽出してください。';
+      this.fail(entry, `採用を確認できませんでした：${reason}`, `Kioku：採用を確認できませんでした。${reason}`);
       return;
     }
     entry.state = 'adopted';

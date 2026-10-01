@@ -1,6 +1,6 @@
 import { MarkdownView, Notice, type App, type Modal, type TFile } from 'obsidian';
 import { extractCandidates, type Range } from '../cards/parser';
-import { adoptCandidate, errorMessage, readNote } from '../cards/writer';
+import { adoptCandidate, confirmAdoption, errorMessage, readNote } from '../cards/writer';
 import { CandidateModal } from './candidate-modal';
 
 /** Lets the plugin close popups on unload without owning their contents. */
@@ -16,6 +16,7 @@ function openModal(app: App, file: TFile, text: string, range: Range | undefined
     scope: selection ? 'selection' : 'note',
     candidates: extractCandidates(text, selection ? range : undefined),
     adopt: (recorded, edited) => adoptCandidate(app, file, recorded, edited),
+    confirm: (cardId, signal) => confirmAdoption(app, file, cardId, signal),
     onClosed: () => tracker.delete(modal),
   });
   tracker.add(modal);

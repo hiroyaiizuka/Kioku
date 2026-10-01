@@ -1,8 +1,8 @@
 // Real plugin source bundled against public-API doubles. Proves the write-path contract
 // (read only on explicit action, write only on adopt, verify before write), not native behaviour.
 import { readFileSync } from 'node:fs';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { FakeEditor, MockMarkdownView, MockTFile, compilePlugin, createApp, flush, installDom } from '../helpers/obsidian-mock.mjs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { FakeEditor, MockMarkdownView, MockTFile, compilePlugin, createApp, installDom } from '../helpers/obsidian-mock.mjs';
 
 const NOTE = [
   '# 生物',
@@ -27,20 +27,26 @@ let notices;
 beforeEach(async () => {
   dom = installDom(); notices = [];
   Plugin = await compilePlugin(readFileSync('src/main.ts', 'utf8'), notices);
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 });
-afterEach(() => { dom.window.close(); delete globalThis.document; delete globalThis.window; });
+afterEach(() => { vi.useRealTimers(); dom.window.close(); delete globalThis.document; delete globalThis.window; });
 
-function openNote(text = NOTE, { mode = 'source', extraViews = [], editor = new FakeEditor(text) } = {}) {
+function openNote(text = NOTE, { mode = 'source', extraViews = [], editor = new FakeEditor(text), canvases = {} } = {}) {
   const file = new MockTFile('学習/生物.md');
   const view = new MockMarkdownView(file, editor, mode);
-  const app = createApp({ files: { [file.path]: text }, views: [...extraViews.map((extra) => extra(file)), view], active: view });
+  const canvasFiles = Object.keys(canvases).map((path) => new MockTFile(path));
+  const app = createApp({ files: { [file.path]: text, ...canvases }, views: [...extraViews.map((extra) => extra(file)), view],
+    active: view, canvases: canvasFiles });
   const plugin = new Plugin(app); plugin.onload();
   return { app, plugin, file, editor, view };
 }
 const extractCommand = (plugin) => plugin.commands.find((command) => command.id === 'extract-explicit-qa');
 const items = () => [...document.querySelectorAll('.kioku-candidate-modal .kioku-candidate')];
 const card = (index) => items()[index];
-async function click(element) { element.click(); await flush(); await flush(); }
+// Fake timers: the post-write disk confirmation (settle 3 s, deadline 6 s) runs instantly but in order.
+const flush = () => vi.advanceTimersByTimeAsync(0);
+const settle = () => vi.advanceTimersByTimeAsync(7000);
+async function click(element) { element.click(); await settle(); }
 function edit(element, value) { element.value = value; element.dispatchEvent(new window.Event('input')); }
 
 describe('extraction popup', () => {
@@ -111,7 +117,10 @@ describe('adoption through the open editor', () => {
     expect(after.replace(/ \^kioku-[0-9a-z]{10}/, '')).toBe(NOTE);
     expect(card(1).querySelector('.kioku-candidate-meta').textContent).toMatch(/採用済み · kioku-/);
     expect(notices[0]).toMatch(/^Kioku：採用しました（kioku-[0-9a-z]{10}）。$/);
-    expect(app.calls.filter((call) => call.startsWith('vault.'))).toEqual([]);
+    // Editor path: no Vault write; the view is flushed with the public save() and the disk is re-read to confirm.
+    expect(app.calls.filter((call) => call.startsWith('vault.process'))).toEqual([]);
+    const afterAdopt = app.calls.slice(app.calls.indexOf('save:学習/生物.md'));
+    expect(afterAdopt[0]).toBe('save:学習/生物.md'); expect(afterAdopt).toContain('vault.read:学習/生物.md');
     editor.undo(); expect(editor.getValue()).toBe(NOTE);
     editor.redo(); expect(editor.getValue()).toBe(after);
   });
@@ -186,7 +195,11 @@ describe('adoption through the open editor', () => {
       const source = { editor: null };
       const extra = (file) => { source.editor = new FakeEditor(NOTE); return new MockMarkdownView(file, source.editor, 'source'); };
       const { app, plugin, editor } = openNote(NOTE, { mode: 'preview', extraViews: editingFirst ? [extra] : [] });
-      if (!editingFirst) app.workspace.getLeavesOfType = () => [{ view: app.workspace.getActiveViewOfType(MockMarkdownView) }, { view: extra(app.workspace.getActiveViewOfType(MockMarkdownView).file) }];
+      if (!editingFirst) {
+        const reading = app.workspace.getActiveViewOfType(MockMarkdownView); const editing = extra(reading.file);
+        editing.onSave = (text) => { app.files[reading.file.path] = text; };
+        app.workspace.getLeavesOfType = (type) => (type === 'markdown' ? [{ view: reading }, { view: editing }] : []);
+      }
       extractCommand(plugin).checkCallback(false); await flush();
       await click(card(0).querySelector('.kioku-candidate-adopt'));
       expect(source.editor.transactions).toHaveLength(1); expect(editor.transactions).toEqual([]);
@@ -217,7 +230,7 @@ describe('adoption through the open editor', () => {
     const { plugin, editor } = openNote();
     extractCommand(plugin).checkCallback(false);
     const button = card(0).querySelector('.kioku-candidate-adopt');
-    button.click(); button.click(); await flush(); await flush();
+    button.click(); button.click(); await settle();
     expect(editor.transactions).toHaveLength(1);
     expect(notices).toHaveLength(1); expect(notices[0]).toMatch(/採用しました/);
     expect(card(0).querySelector('.kioku-candidate-meta').textContent).toMatch(/採用済み · kioku-/);
@@ -278,6 +291,107 @@ describe('adoption through the open editor', () => {
   });
 });
 
+describe('open Canvas embeds (pre-write guard)', () => {
+  const canvas = (nodes) => JSON.stringify({ nodes, edges: [] });
+  const EMBEDDED = 'このノートは開いている Canvas（board.canvas）に埋め込まれているため保存しませんでした。Canvas を閉じてから採用してください。';
+
+  for (const mode of ['preview', 'source']) {
+    it(`refuses without writing when an open Canvas embeds the note (${mode})`, async () => {
+      const { app, plugin, editor, file } = openNote(NOTE, { mode,
+        canvases: { 'board.canvas': canvas([{ id: 'n1', type: 'text', text: 'x' }, { id: 'n2', type: 'file', file: '学習/生物.md' }]) } });
+      extractCommand(plugin).checkCallback(false); await flush();
+      await click(card(0).querySelector('.kioku-candidate-adopt'));
+      expect(notices).toEqual([`Kioku：保存しませんでした。${EMBEDDED}`]);
+      expect(card(0).querySelector('.kioku-candidate-message').textContent).toBe(`保存しませんでした：${EMBEDDED}`);
+      expect(editor.transactions).toEqual([]); expect(app.files[file.path]).toBe(NOTE);
+      expect(app.calls.some((call) => call.startsWith('vault.process'))).toBe(false);
+    });
+  }
+
+  it('adopts normally when open Canvases do not embed the note', async () => {
+    const { app, plugin, file } = openNote(NOTE, { mode: 'preview',
+      canvases: { 'board.canvas': canvas([{ id: 'n1', type: 'file', file: '別のノート.md' }]) } });
+    extractCommand(plugin).checkCallback(false); await flush();
+    await click(card(0).querySelector('.kioku-candidate-adopt'));
+    expect(app.calls).toContain('vault.cachedRead:board.canvas');
+    expect(app.files[file.path]).toMatch(/\^kioku-\w{10}/); expect(notices[0]).toMatch(/^Kioku：採用しました/);
+  });
+
+  it('refuses when an open Canvas cannot be read as JSON', async () => {
+    const { app, plugin, file } = openNote(NOTE, { mode: 'preview', canvases: { 'board.canvas': '{broken' } });
+    extractCommand(plugin).checkCallback(false); await flush();
+    await click(card(0).querySelector('.kioku-candidate-adopt'));
+    expect(notices[0]).toMatch(/^Kioku：保存しませんでした。開いている Canvas（board\.canvas）を確認できなかったため保存しませんでした（/);
+    expect(app.files[file.path]).toBe(NOTE);
+  });
+});
+
+describe('post-write disk confirmation', () => {
+  it('shows a pending state and reports success only after the ID stays on disk for the settle window', async () => {
+    for (const mode of ['source', 'preview']) {
+      dom.window.document.body.replaceChildren(); notices.length = 0;
+      const { app, plugin, file } = openNote(NOTE, { mode });
+      extractCommand(plugin).checkCallback(false); await flush();
+      card(0).querySelector('.kioku-candidate-adopt').click();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(app.files[file.path]).toMatch(/\^kioku-\w{10}/);
+      expect(card(0).querySelector('.kioku-candidate-message').textContent).toBe('保存を確認しています…');
+      expect(card(0).querySelector('.kioku-candidate-meta').textContent).toBe('3 行目 · 未採用');
+      expect(card(1).querySelector('.kioku-candidate-adopt').disabled).toBe(true);
+      expect(notices).toEqual([]);
+      await vi.advanceTimersByTimeAsync(2800);
+      expect(notices).toEqual([]);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(notices).toHaveLength(1); expect(notices[0]).toMatch(/^Kioku：採用しました（kioku-\w{10}）。$/);
+      expect(card(0).querySelector('.kioku-candidate-meta').textContent).toMatch(/^3 行目 · 採用済み · kioku-/);
+      expect(vi.getTimerCount()).toBe(0);
+    }
+  });
+
+  it('reports a lost write (overwritten by another view) and allows a clean re-adoption', async () => {
+    const { app, plugin, file } = openNote(NOTE, { mode: 'preview' });
+    extractCommand(plugin).checkCallback(false); await flush();
+    card(0).querySelector('.kioku-candidate-adopt').click();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(app.files[file.path]).toMatch(/\^kioku-\w{10}/);
+    // A Canvas node (or hover editor) saves its stale buffer ~2 s later.
+    app.files[file.path] = `${NOTE}canvasTyped`;
+    await settle();
+    const lost = '保存後に ID が見つかりません。別の画面の保存で上書きされた可能性があります。もう一度抽出してください。';
+    expect(notices).toEqual([`Kioku：採用を確認できませんでした。${lost}`]);
+    expect(card(0).querySelector('.kioku-candidate-message').textContent).toBe(`採用を確認できませんでした：${lost}`);
+    expect(card(0).querySelector('.kioku-candidate-meta').textContent).toBe('3 行目 · 未採用');
+    expect(card(0).querySelector('.kioku-candidate-adopt').disabled).toBe(false);
+    await click(card(0).querySelector('.kioku-candidate-adopt'));
+    expect(notices[1]).toMatch(/^Kioku：採用しました/);
+    expect(app.files[file.path].match(/\^kioku-/g)).toHaveLength(1);
+    expect(app.files[file.path].replace(/ \^kioku-\w{10}/, '').replace('\n\n', '\n')).toBe(`${NOTE}canvasTyped`.replace('\n\n', '\n'));
+  });
+
+  it('reports a lost write when the editor flush never reaches the disk', async () => {
+    const { app, plugin, view } = openNote(NOTE);
+    view.save = async () => {}; // the editor never persists
+    extractCommand(plugin).checkCallback(false);
+    await click(card(0).querySelector('.kioku-candidate-adopt'));
+    expect(notices[0]).toMatch(/^Kioku：採用を確認できませんでした。/);
+    expect(app.calls.some((call) => call.startsWith('vault.process'))).toBe(false);
+  });
+
+  for (const how of ['close', 'unload']) {
+    it(`cancels the pending confirmation on ${how} without notices or leftover timers`, async () => {
+      const { plugin } = openNote(NOTE, { mode: 'preview' });
+      extractCommand(plugin).checkCallback(false); await flush();
+      card(0).querySelector('.kioku-candidate-adopt').click();
+      await vi.advanceTimersByTimeAsync(300);
+      if (how === 'close') document.querySelector('.kioku-candidate-close').click(); else plugin.onunload();
+      expect(vi.getTimerCount()).toBe(0);
+      await settle();
+      expect(notices).toEqual([]);
+      expect(document.querySelector('.kioku-candidate-modal')).toBeNull();
+    });
+  }
+});
+
 describe('closed note through the file menu', () => {
   function closedNote(text) {
     const file = new MockTFile('閉じた.md'); const app = createApp({ files: { '閉じた.md': text } });
@@ -294,9 +408,12 @@ describe('closed note through the file menu', () => {
     expect(app.calls).toEqual([]);
     expect(menuItems.map((item) => item.title)).toEqual(['Kioku：問い・答えの候補を抽出']);
     menuItems[0].handler(); await flush();
-    expect(app.calls).toEqual(['workspace.getLeavesOfType', 'vault.read:閉じた.md']);
+    expect(app.calls).toEqual(['workspace.getLeavesOfType:markdown', 'vault.read:閉じた.md']);
     await click(card(0).querySelector('.kioku-candidate-adopt'));
-    expect(app.calls.slice(2)).toEqual(['workspace.getLeavesOfType', 'vault.process:閉じた.md']);
+    expect(app.calls.slice(2, 6)).toEqual(['workspace.getLeavesOfType:canvas', 'workspace.getLeavesOfType:markdown',
+      'vault.process:閉じた.md', 'workspace.getLeavesOfType:markdown']);
+    // Then only reads (disk confirmation), never another write.
+    expect(new Set(app.calls.slice(6))).toEqual(new Set(['vault.read:閉じた.md']));
     expect(app.files['閉じた.md']).toMatch(/A: 光で糖を作る反応 \^kioku-\w{10}\n/);
     expect(app.files['閉じた.md'].replace(/ \^kioku-\w{10}/, '')).toBe(NOTE);
   });
