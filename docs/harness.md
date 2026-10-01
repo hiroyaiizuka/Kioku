@@ -41,7 +41,7 @@ prepare/update/preflight は filesystem の成功であり、Obsidian UI の成�
   kill <上で表示され、command line に専用 --user-data-dir を厳密に含む main プロセスの PID（grep 自身の行と --type= 付き helper は除く）>
   ```
 
-- `harness:launch` は起動者 PID を書いた `.tooling/obsidian-launch.lock` で同時実行を拒否する。Ctrl-C などで残った lock は、記録 PID が終了していれば次回の launch が一意名へ rename してから内容を再確認して回収する（競合 launcher の新しい lock は削除せず戻す）。終了時は自分の PID の lock だけを消す。
+- `harness:launch` は起動者 PID を書いた `.tooling/obsidian-launch.lock` で同時実行を拒否する。Ctrl-C などで残った lock は、記録 PID が終了していれば次回の launch が一意名へ rename してから内容を再確認して回収する（競合 launcher の新しい lock は戻す。戻す前に3つ目の launcher が新しい lock を作っていた場合は、2つ目の lock を `obsidian-launch.lock.stale-*` として残し、その名前を警告に出して再判定する。この3者競合では2つ目の launcher が自分は lock を持っていると思ったまま続行し得るが、後続の記録済みインスタンス・専用 profile プロセス・CDP port の検査で二重起動は通常拒否される。ただし両者がほぼ同時にそれらの検査を通過する完全な競合までは保証しない）。終了時は自分の PID の lock だけを消し、解放に失敗しても launch 結果は隠さず警告だけ出す（lock は stale 回収に任せる）。launch 開始時、owner PID が終了済みの `obsidian-launch.lock.stale-*` だけを削除する。
 
 利用者向けの手動操作の案内: 専用インスタンスの実行中に普段の Obsidian を開くときは、利用者自身が `open -n -a Obsidian` を実行する（harness とエージェントは実行しない。Dock のクリックは専用インスタンスを前面に出すだけのことがある）。どちらの window かは title の Vault 名で見分ける。CDP port は loopback だけだが、実行中は同じマシンの任意のローカルプロセスが Node 権限で JS を実行できるため、テストしないときは `harness:quit` で止める。
 

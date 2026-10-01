@@ -7,7 +7,7 @@ import { accessSync, closeSync, constants, linkSync, lstatSync, openSync, readdi
   unlinkSync, writeFileSync } from 'node:fs';
 import { connect, createServer } from 'node:net';
 import { userInfo } from 'node:os';
-import { isAbsolute, join, normalize } from 'node:path';
+import { basename, isAbsolute, join, normalize } from 'node:path';
 import { readJSON, sha256 } from './build.mjs';
 import { preflight } from './harness.mjs';
 import { atomicWrite, ensureDirectory, safePath, safeRead } from './paths.mjs';
@@ -261,6 +261,24 @@ export function childEnvironment(env, home) {
 }
 
 /** Read a lock's owner text; null when it vanished meanwhile (another launcher won a race). */
+function warn(system, message) { (system.warn ?? ((text) => console.warn(text)))(message); }
+function removeIfPresent(file) {
+  try { unlinkSync(file); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
+
+/** Remove leftover `<lock>.stale-*` files whose recorded owner PID is dead; keep anything else. */
+function cleanStaleLockFiles(root, paths, system) {
+  const prefix = `${basename(paths.lock)}.stale-`;
+  const removed = [];
+  for (const name of readdirSync(paths.tooling).filter((entry) => entry.startsWith(prefix)).sort()) {
+    const file = join(paths.tooling, name);
+    let owner;
+    try { owner = lockOwner(root, file); } catch (error) { warn(system, `Kept ${file}: ${error.message}`); continue; }
+    if (owner !== null && /^\d+$/u.test(owner) && !isAlive(Number(owner), system)) { removeIfPresent(file); removed.push(name); }
+  }
+  return removed;
+}
+
 function lockOwner(root, file) {
   try { return safeRead(root, file).toString('utf8').trim(); }
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }
@@ -269,8 +287,9 @@ function lockOwner(root, file) {
 /**
  * Exclusive launch lock holding the launcher PID. A lock whose owner PID is dead (e.g. Ctrl-C) is stale and is
  * recovered by renaming it to a unique name first, then checking the renamed bytes are still the dead owner's: if a
- * concurrent launcher replaced it in between, its fresh lock is restored (never deleted). Races retry a bounded number
- * of times. `system.lockRace(stage)` is a test-only hook to interleave a competing launcher.
+ * concurrent launcher replaced it in between, its fresh lock is restored. If a third launcher already created a new
+ * lock, the moved file is kept (never deleted), a warning names it, and the state is re-evaluated. Races retry a
+ * bounded number of times. `system.lockRace(stage)` is a test-only hook to interleave competing launchers.
  */
 function acquireLaunchLock(root, paths, system) {
   const me = String(system.pid ?? process.pid);
@@ -294,12 +313,19 @@ function acquireLaunchLock(root, paths, system) {
     safePath(root, moved, 'file', true);
     try { renameSync(paths.lock, moved); }
     catch (error) { if (error.code === 'ENOENT') continue; throw error; }
-    if (lockOwner(root, moved) !== owner) {
-      // We moved a competitor's fresh lock: put it back unless a newer lock already exists, then re-evaluate.
+    const movedOwner = lockOwner(root, moved);
+    if (movedOwner !== null && movedOwner !== owner) {
+      // We moved a competitor's fresh lock: put it back, then re-evaluate.
+      system.lockRace?.('restore');
       try { linkSync(moved, paths.lock); }
-      catch (error) { if (error.code !== 'EEXIST') throw error; }
+      catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+        // A third launcher created a newer lock meanwhile: keep the competitor's lock file for inspection.
+        warn(system, `Launch lock race: kept the lock of pid ${movedOwner} as ${moved} because ${paths.lock} was recreated.`);
+        continue;
+      }
     }
-    unlinkSync(moved);
+    removeIfPresent(moved);
   }
   throw new Error(`Could not acquire ${paths.lock} (concurrent launches); retry.`);
 }
@@ -314,8 +340,14 @@ export async function launchDedicated(root, env = process.env, system = defaultS
   ensureDirectory(root, paths.tooling);
   // Exclusive launch lock: overlapping launches must not overwrite / clear each other's record.
   const me = acquireLaunchLock(root, paths, system);
-  try { return await launchLocked(root, env, system, paths); }
-  finally { if (lockOwner(root, paths.lock) === me) unlinkSync(paths.lock); } // Never remove another launcher's lock.
+  try {
+    cleanStaleLockFiles(root, paths, system);
+    return await launchLocked(root, env, system, paths);
+  } finally {
+    // Never remove another launcher's lock, and never let a release problem mask the launch result.
+    try { if (lockOwner(root, paths.lock) === me) unlinkSync(paths.lock); }
+    catch (error) { warn(system, `Could not release ${paths.lock} (${error.message}); a later launch recovers it once pid ${me} exits.`); }
+  }
 }
 
 async function launchLocked(root, env, system, paths) {

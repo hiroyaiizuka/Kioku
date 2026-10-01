@@ -248,6 +248,42 @@ describe('dedicated Obsidian process control (fake process table)', () => {
       expect(readdirSync(paths.tooling).filter((name) => name.includes('.stale-'))).toEqual([]);
     });
   }
+  it('three launchers: keeps the second launcher\'s moved lock, warns with its name, and re-evaluates', async () => {
+    const { root, paths, source } = setup(); writeFileSync(join(source, 'obsidian-1.14.3.asar'), 'asar');
+    mkdirSync(paths.tooling); writeFileSync(paths.lock, '999999\n');
+    const system = fakeSystem({ source, alive: [777, 888] }); const warnings = [];
+    system.warn = (message) => warnings.push(message);
+    system.lockRace = (stage) => {
+      if (stage === 'stale') writeFileSync(paths.lock, '777\n'); // B recovered the dead lock first.
+      if (stage === 'restore') writeFileSync(paths.lock, '888\n'); // C created a newer lock before our restore.
+    };
+    await expect(launchDedicated(root, {}, system)).rejects.toThrow(/pid 888\) holds/);
+    const kept = readdirSync(paths.tooling).filter((name) => name.includes('.stale-'));
+    expect(kept).toHaveLength(1); expect(readFileSync(join(paths.tooling, kept[0]), 'utf8')).toBe('777\n');
+    expect(warnings.join()).toContain(kept[0]); expect(readFileSync(paths.lock, 'utf8')).toBe('888\n');
+  });
+  it('cleans leftover stale-lock files only when their owner pid is dead', async () => {
+    const { root, paths, source } = setup(); writeFileSync(join(source, 'obsidian-1.14.3.asar'), 'asar');
+    mkdirSync(paths.tooling);
+    writeFileSync(join(paths.tooling, 'obsidian-launch.lock.stale-1-dead'), '999999\n');
+    writeFileSync(join(paths.tooling, 'obsidian-launch.lock.stale-2-live'), '777\n');
+    writeFileSync(join(paths.tooling, 'obsidian-launch.lock.stale-3-garbage'), 'not a pid\n');
+    const system = fakeSystem({ source, alive: [777] });
+    expect(await launchDedicated(root, {}, system)).toMatchObject({ status: 'LAUNCHED' });
+    expect(readdirSync(paths.tooling).filter((name) => name.includes('.stale-')).sort())
+      .toEqual(['obsidian-launch.lock.stale-2-live', 'obsidian-launch.lock.stale-3-garbage']);
+  });
+  it('a lock release failure only warns and never masks a successful launch', async () => {
+    const { root, paths, source } = setup(); writeFileSync(join(source, 'obsidian-1.14.3.asar'), 'asar');
+    const system = fakeSystem({ source }); const warnings = [];
+    system.warn = (message) => warnings.push(message);
+    system.waitForDedicatedPage = async ({ version }) => {
+      linkSync(paths.lock, join(paths.tooling, 'transient-link')); // Like the restore window: nlink 2.
+      return { target: { webSocketDebuggerUrl: 'ws://x' }, version };
+    };
+    expect(await launchDedicated(root, {}, system)).toMatchObject({ status: 'LAUNCHED', pid: 4242 });
+    expect(warnings.join()).toMatch(/Could not release .*hard link/); expect(existsSync(paths.lock)).toBe(true);
+  });
   it('releases only its own lock when another launcher replaced it meanwhile', async () => {
     const { root, paths, source } = setup(); writeFileSync(join(source, 'obsidian-1.14.3.asar'), 'asar');
     const system = fakeSystem({ source });
