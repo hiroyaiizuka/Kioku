@@ -338,25 +338,37 @@ describe('dedicated Obsidian process control (fake process table)', () => {
     await expect(launchDedicated(root, {}, late)).rejects.toThrow(/late\.sock exists/);
     expect(late.spawned).toEqual([]); expect(existsSync(paths.state)).toBe(false);
 
-    expect(resolveCliSocketPath({ HOME: '' })).toBe(join(userInfo().homedir, '.obsidian-cli.sock'));
+    const empty = fakeSystem({ source }); delete empty.cliSocketPath;
+    await expect(launchDedicated(root, { HOME: '' }, empty)).rejects.toThrow(/HOME is set but empty/);
+    expect(empty.spawned).toEqual([]);
     expect(resolveCliSocketPath({})).toBe(join(userInfo().homedir, '.obsidian-cli.sock'));
     expect(resolveCliSocketPath({ HOME: '/Users/h' })).toBe('/Users/h/.obsidian-cli.sock');
   });
-  it('quit lstats the CLI socket before/after and warns (never touching it) when one existed right before quit', async () => {
-    const { root, paths } = setup();
-    const socket = join(root, 'user.sock'); writeFileSync(socket, 'user');
-    const system = fakeSystem({ alive: [4242], commands: { 4242: `/A/Obsidian --user-data-dir=${paths.profile}` } });
-    system.cliSocketPath = socket; const warnings = []; system.warn = (message) => warnings.push(message);
-    writeState(root, { pid: 4242, profile: paths.profile, port: 9222, startedAt: '2026-10-02T00:00:00.000Z' });
-    const result = await quitDedicated(root, system);
-    expect(result.cliSocket).toMatchObject({ path: socket, existedBeforeQuit: true, existsAfterQuit: true });
-    expect(result.cliSocket.warning).toMatch(/restart your Obsidian/); expect(warnings).toHaveLength(1);
+  it('launch records the socket inode after page ready; quit warns only when another process recreated it', async () => {
+    const { root, paths, source } = setup(); writeFileSync(join(source, 'obsidian-1.14.3.asar'), 'asar');
+    const socket = join(root, 'cli.sock');
+    const system = fakeSystem({ source }); system.cliSocketPath = socket;
+    system.waitForDedicatedPage = async ({ version }) => { writeFileSync(socket, 'dedicated'); return { target: { webSocketDebuggerUrl: 'ws://x' }, version }; };
+    await launchDedicated(root, {}, system);
+    const recorded = readState(root).cliSocket; const own = statSync(socket, { bigint: true });
+    expect(recorded).toEqual({ path: socket, dev: String(own.dev), ino: String(own.ino) });
+    const quit = async (mutate) => {
+      const fake = fakeSystem({ alive: [4242], commands: { 4242: `/A/Obsidian --user-data-dir=${paths.profile}` } });
+      const warnings = []; fake.warn = (message) => warnings.push(message); mutate?.();
+      const result = await quitDedicated(root, fake); return { result, warnings };
+    };
+    // Same inode (the dedicated instance's own socket): no warning.
+    const same = await quit(); expect(same.warnings).toEqual([]); expect(same.result.cliSocket.warning).toBeUndefined();
+    // Different inode (e.g. the user's Obsidian recreated it): warning, socket never touched.
+    writeState(root, { pid: 4242, profile: paths.profile, port: 9222, startedAt: '2026-10-02T00:00:00.000Z', cliSocket: recorded });
+    const other = await quit(() => { unlinkSync(socket); writeFileSync(join(root, 'filler'), 'x'); writeFileSync(socket, 'user'); });
+    expect(other.warnings).toHaveLength(1); expect(other.result.cliSocket.warning).toMatch(/restart your Obsidian/);
     expect(readFileSync(socket, 'utf8')).toBe('user');
-    const quiet = setup(); const absent = fakeSystem({ alive: [4242], commands: { 4242: `/A/Obsidian --user-data-dir=${quiet.paths.profile}` } });
-    absent.warn = (message) => warnings.push(message);
-    writeState(quiet.root, { pid: 4242, profile: quiet.paths.profile, port: 9222, startedAt: '2026-10-02T00:00:00.000Z' });
-    expect((await quitDedicated(quiet.root, absent)).cliSocket).toMatchObject({ existedBeforeQuit: false });
-    expect(warnings).toHaveLength(1);
+    // No recorded inode: warn only if a socket exists.
+    writeState(root, { pid: 4242, profile: paths.profile, port: 9222, startedAt: '2026-10-02T00:00:00.000Z', cliSocket: { path: socket } });
+    expect((await quit()).warnings).toHaveLength(1);
+    writeState(root, { pid: 4242, profile: paths.profile, port: 9222, startedAt: '2026-10-02T00:00:00.000Z', cliSocket: { path: socket } });
+    expect((await quit(() => unlinkSync(socket))).warnings).toEqual([]);
   });
   it('launch reports an asynchronous spawn failure without an unhandled error event', async () => {
     const { root, paths, source } = setup(); writeFileSync(join(source, 'obsidian-1.14.3.asar'), 'asar');

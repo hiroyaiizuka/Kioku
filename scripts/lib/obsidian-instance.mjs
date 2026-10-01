@@ -365,6 +365,10 @@ async function launchLocked(root, env, system, paths) {
   if (await system.portInUse(port)) throw new Error(`CDP port ${port} is already in use; refusing to launch (set KIOKU_CDP_PORT).`);
   // Obsidian on macOS unlinks and re-listens on this socket at startup and unlinks it on quit (see docs/harness.md).
   // Early gate (so a refusal creates nothing), lstat only; taking over an existing socket is opt-in.
+  if (env.HOME === '') {
+    // Node's os.homedir() would return '' and Obsidian would put its socket relative to its cwd: refuse instead of guessing.
+    throw new Error('HOME is set but empty; refusing to launch. Nothing was started.');
+  }
   const socket = system.cliSocketPath ?? resolveCliSocketPath(env);
   assertSocketTakeoverAllowed(socket, env);
 
@@ -389,8 +393,9 @@ async function launchLocked(root, env, system, paths) {
   }
   child.unref?.();
   const startedAt = system.now().toISOString();
-  writeState(root, { pid: child.pid, profile: paths.profile, port, startedAt, executable, version: profile.version,
-    vault: expected.vault, log: paths.log });
+  const state = { pid: child.pid, profile: paths.profile, port, startedAt, executable, version: profile.version,
+    vault: expected.vault, log: paths.log };
+  writeState(root, state);
 
   let page;
   try {
@@ -402,6 +407,10 @@ async function launchLocked(root, env, system, paths) {
     if (ours && !isAlive(child.pid, system)) clearState(root);
     throw new Error(`${error.message} Log: ${paths.log}. If it is still running, use npm run harness:quit.`);
   }
+  // Page ready: the dedicated instance has replaced the socket by now. Record its inode so quit can tell whether
+  // someone else (likely the user's Obsidian) recreated it later. lstat only.
+  const identity = socketIdentity(socket);
+  writeState(root, { ...state, cliSocket: { path: socket, ...(identity ?? {}) } });
   const restrictedMode = await system.enableCommunityPlugins({ port, target: page.target });
   return { status: 'LAUNCHED', pid: child.pid, version: page.version, port, startedAt, profile: paths.profile,
     vault: expected.vault, asar: { version: profile.version, reused: profile.reused, removed: profile.removed },
@@ -422,8 +431,14 @@ export function resolveQuitTimeout(env = process.env) {
 
 /** Where macOS Obsidian 1.14.3 puts its CLI socket: join(os.homedir(), '.obsidian-cli.sock') (XDG is ignored on darwin). */
 export const cliSocketPath = (home = userInfo().homedir) => join(home, '.obsidian-cli.sock');
-/** os.homedir() semantics: HOME when non-empty, otherwise the passwd home directory. */
-export const resolveCliSocketPath = (env = process.env) => cliSocketPath(env.HOME || userInfo().homedir);
+/** HOME when set, otherwise the passwd home directory (os.homedir()); launch refuses an empty HOME beforehand. */
+export const resolveCliSocketPath = (env = process.env) => cliSocketPath(env.HOME ?? userInfo().homedir);
+
+/** lstat-only identity of the socket inode ({dev, ino} as strings), or null when absent / unreadable. */
+export function socketIdentity(socket) {
+  try { const stat = lstatSync(socket, { bigint: true }); return { dev: String(stat.dev), ino: String(stat.ino) }; }
+  catch { return null; }
+}
 
 /** lstat only. ENOENT is the only "absent"; any other error (EACCES, ENOTDIR, ELOOP, ...) refuses (fail closed). */
 export function cliSocketExists(socket) {
@@ -467,10 +482,15 @@ export async function quitDedicated(root, system = defaultSystem, timeoutMs = de
     return { status: 'NOT_RUNNING', pid: recorded.state.pid, message: `${recorded.reason}; nothing was signalled. State cleared.` };
   }
   const { pid } = recorded.state;
-  // lstat only (never touched): a socket right before quit is likely another Obsidian's if it was started meanwhile,
-  // and the dedicated instance's will-quit unlink may remove it (inferred from the 1.14.3 asar).
-  const socket = system.cliSocketPath ?? resolveCliSocketPath();
+  // lstat only (never touched). A socket whose inode differs from the one recorded at launch (or any socket when none
+  // was recorded) was recreated by someone else, likely the user's Obsidian; the dedicated instance's will-quit unlink
+  // may remove it (inferred from the 1.14.3 asar).
+  const socket = recorded.state.cliSocket?.path ?? system.cliSocketPath ?? resolveCliSocketPath();
   const existedBeforeQuit = socketState(socket);
+  const before = socketIdentity(socket);
+  const ownIno = recorded.state.cliSocket?.ino;
+  const recreatedByOther = before !== null
+    && (ownIno === undefined || before.ino !== ownIno || before.dev !== recorded.state.cliSocket?.dev);
   system.kill(pid, 'SIGTERM');
   const end = Date.now() + timeoutMs;
   while (isAlive(pid, system)) {
@@ -494,9 +514,9 @@ export async function quitDedicated(root, system = defaultSystem, timeoutMs = de
   }
   clearState(root);
   const cliSocket = { path: socket, existedBeforeQuit, existsAfterQuit: socketState(socket) };
-  if (existedBeforeQuit === true) {
-    cliSocket.warning = 'A CLI socket existed right before quit. If you started your own Obsidian while the dedicated instance ran, '
-      + 'its socket may have been removed by the dedicated instance on quit: restart your Obsidian to restore its CLI.';
+  if (recreatedByOther) {
+    cliSocket.warning = 'Right before quit the CLI socket was not the one the dedicated instance created (likely your own Obsidian '
+      + 'recreated it); the dedicated instance may have removed it on quit: restart your Obsidian to restore its CLI.';
     warn(system, cliSocket.warning);
   }
   return { status: 'STOPPED', pid, port: recorded.state.port, cliSocket,
