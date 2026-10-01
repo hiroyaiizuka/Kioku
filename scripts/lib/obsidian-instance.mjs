@@ -253,7 +253,7 @@ export async function assertDedicatedStopped(root, ports, system = defaultSystem
 /**
  * Environment for the dedicated child: inherited unchanged (HOME included) except ELECTRON_* (e.g.
  * ELECTRON_RUN_AS_NODE) and NODE_OPTIONS. A private HOME is NOT used: natively it hid the login keychain, Electron
- * safeStorage then raised a blocking SecurityAgent dialog (artifacts/lev-279-native/RECORD.md, Step 3).
+ * safeStorage then raised a blocking SecurityAgent dialog (artifacts/lev-279/e5f67e6-partial/RECORD.md, Step 3; gitignored local evidence).
  */
 export function childEnvironment(env) {
   const result = { ...env };
@@ -363,6 +363,17 @@ async function launchLocked(root, env, system, paths) {
   const strays = profileProcesses(paths.profile, system);
   if (strays.length) throw new Error(`Unrecorded processes use the dedicated profile (pid ${strays.join(', ')}); refusing to launch a second one.`);
   if (await system.portInUse(port)) throw new Error(`CDP port ${port} is already in use; refusing to launch (set KIOKU_CDP_PORT).`);
+  // Obsidian on macOS unlinks and re-listens on this socket at startup and unlinks it on quit (see docs/harness.md).
+  // Decided before spawning (lstat only); taking over an existing socket is opt-in.
+  const socket = system.cliSocketPath ?? cliSocketPath(env.HOME ?? userInfo().homedir);
+  let socketExisted = false;
+  try { lstatSync(socket); socketExisted = true; } catch { socketExisted = false; }
+  if (socketExisted && env.KIOKU_ALLOW_CLI_SOCKET_TAKEOVER !== '1') {
+    throw new Error(`${socket} exists (another Obsidian's CLI socket). Launching would take it over: while the dedicated `
+      + 'instance runs, `obsidian` CLI commands from you or agents would reach the dedicated test-vault instance, and on quit '
+      + 'the socket is removed, so your CLI stays broken until you restart your Obsidian (the GUI is unaffected). Nothing was '
+      + 'started. Only with the user\'s explicit consent: KIOKU_ALLOW_CLI_SOCKET_TAKEOVER=1 npm run harness:launch.');
+  }
 
   const profile = prepareProfile(root, { vault: expected.vault, sourceDir: system.asarSourceDir ?? defaultAsarSourceDir(system.platform),
     minAppVersion, now: system.now().getTime() });
@@ -384,10 +395,6 @@ async function launchLocked(root, env, system, paths) {
   const startedAt = system.now().toISOString();
   writeState(root, { pid: child.pid, profile: paths.profile, port, startedAt, executable, version: profile.version,
     vault: expected.vault, log: paths.log });
-  // Obsidian on macOS unlinks and re-listens on this socket at startup and unlinks it on quit (see docs/harness.md).
-  const socket = system.cliSocketPath ?? cliSocketPath();
-  let socketExisted = false;
-  try { socketExisted = lstatSync(socket).isSocket(); } catch { socketExisted = false; }
 
   let page;
   try {
@@ -403,8 +410,8 @@ async function launchLocked(root, env, system, paths) {
   return { status: 'LAUNCHED', pid: child.pid, version: page.version, port, startedAt, profile: paths.profile,
     vault: expected.vault, asar: { version: profile.version, reused: profile.reused, removed: profile.removed },
     restrictedMode, log: paths.log,
-    cliSocket: { path: socket, existedBeforeLaunch: socketExisted,
-      note: 'Taken over by the dedicated instance while it runs and removed on harness:quit; another Obsidian\'s CLI needs that Obsidian restarted.' } };
+    cliSocket: { path: socket, existedBeforeLaunch: socketExisted, takenOver: socketExisted,
+      note: 'Owned by the dedicated instance while it runs (CLI commands reach test-vault) and removed on harness:quit.' } };
 }
 
 /** Terminate only the recorded PID, after proving its command line carries the dedicated profile flag. */

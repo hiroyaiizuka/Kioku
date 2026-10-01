@@ -2,6 +2,7 @@
 import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { createServer } from 'node:net';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, createFixture } from '../helpers/fixture.mjs';
@@ -25,6 +26,7 @@ function fakeSystem({ alive = [], commands = {}, list = '', busyPorts = [], sour
   const live = new Set(alive); const signals = []; const spawned = []; const psCalls = [];
   return {
     platform: 'darwin', signals, spawned, psCalls, executable: '/fake/Obsidian.app/Contents/MacOS/Obsidian', asarSourceDir: source,
+    cliSocketPath: '/nonexistent/kioku-test/.obsidian-cli.sock',
     kill(pid, signal) {
       if (!live.has(pid)) throw esrch();
       if (signal !== 0) { signals.push([pid, signal]); live.delete(pid); }
@@ -208,7 +210,7 @@ describe('dedicated Obsidian process control (fake process table)', () => {
     expect(childEnvironment({ ELECTRON_RUN_AS_NODE: '1', NODE_OPTIONS: 'x', ELECTRONX: 'kept', HOME: '/h' }))
       .toEqual({ ELECTRONX: 'kept', HOME: '/h' });
     expect(existsSync(join(paths.tooling, 'obsidian-home'))).toBe(false);
-    expect(result.cliSocket).toMatchObject({ path: join(root, 'no-socket-here'), existedBeforeLaunch: false });
+    expect(result.cliSocket).toMatchObject({ path: join(root, 'no-socket-here'), existedBeforeLaunch: false, takenOver: false });
     expect(cliSocketPath('/Users/u')).toBe('/Users/u/.obsidian-cli.sock');
     expect(readState(root)).toMatchObject({ pid: 4242, profile: paths.profile, port: 9333, startedAt: '2026-10-02T00:00:00.000Z' });
     expect(existsSync(paths.log)).toBe(true);
@@ -302,6 +304,23 @@ describe('dedicated Obsidian process control (fake process table)', () => {
     await launchDedicated(root, {}, system);
     expect(readFileSync(paths.lock, 'utf8')).toBe('777\n');
   });
+  it('CLI socket takeover is opt-in: refuse when the socket exists, proceed with explicit consent or when absent', async () => {
+    const { root, paths, source } = setup(); writeFileSync(join(source, 'obsidian-1.14.3.asar'), 'asar');
+    const socket = join(root, 'fake-home', '.obsidian-cli.sock'); mkdirSync(join(root, 'fake-home')); writeFileSync(socket, '');
+    const refused = fakeSystem({ source }); refused.cliSocketPath = socket;
+    await expect(launchDedicated(root, {}, refused)).rejects.toThrow(/exists[\s\S]*reach the dedicated test-vault[\s\S]*restart your Obsidian[\s\S]*KIOKU_ALLOW_CLI_SOCKET_TAKEOVER=1/);
+    await expect(launchDedicated(root, { KIOKU_ALLOW_CLI_SOCKET_TAKEOVER: 'yes' }, refused)).rejects.toThrow(/Nothing was started/);
+    expect(refused.spawned).toEqual([]); expect(existsSync(paths.state)).toBe(false); expect(existsSync(paths.profile)).toBe(false);
+    const allowed = fakeSystem({ source }); allowed.cliSocketPath = socket;
+    expect((await launchDedicated(root, { KIOKU_ALLOW_CLI_SOCKET_TAKEOVER: '1' }, allowed)).cliSocket)
+      .toMatchObject({ path: socket, existedBeforeLaunch: true, takenOver: true });
+    expect(allowed.spawned).toHaveLength(1);
+    // Default path follows the passed HOME (what Obsidian's os.homedir() uses).
+    const other = setup(); writeFileSync(join(other.source, 'obsidian-1.14.3.asar'), 'asar');
+    mkdirSync(join(other.root, 'h')); writeFileSync(join(other.root, 'h', '.obsidian-cli.sock'), '');
+    const viaHome = fakeSystem({ source: other.source }); delete viaHome.cliSocketPath;
+    await expect(launchDedicated(other.root, { HOME: join(other.root, 'h') }, viaHome)).rejects.toThrow(/h\/\.obsidian-cli\.sock exists/);
+  });
   it('launch reports an asynchronous spawn failure without an unhandled error event', async () => {
     const { root, paths, source } = setup(); writeFileSync(join(source, 'obsidian-1.14.3.asar'), 'asar');
     const system = fakeSystem({ source });
@@ -352,6 +371,19 @@ describe('baseline precondition is about the dedicated instance only', () => {
     const { port } = server.address();
     try { expect(await portInUse(port)).toBe(true); } finally { await new Promise((resolve) => server.close(resolve)); }
     expect(await portInUse(port)).toBe(false);
+  });
+});
+
+describe('obsidian-instance CLI', () => {
+  it('quit resolves KIOKU_QUIT_TIMEOUT_MS from the environment and is a no-op without a record', () => {
+    const { root } = setup();
+    const run = (env) => spawnSync(process.execPath, ['scripts/obsidian-instance-cli.mjs', 'quit'],
+      { cwd: root, encoding: 'utf8', env: { ...process.env, ...env } });
+    const invalid = run({ KIOKU_QUIT_TIMEOUT_MS: '5' });
+    expect(invalid.status).toBe(1); expect(invalid.stderr).toMatch(/KIOKU_QUIT_TIMEOUT_MS must be/);
+    const ok = run({ KIOKU_QUIT_TIMEOUT_MS: '120000' });
+    expect(ok.status, ok.stderr).toBe(0); expect(JSON.parse(ok.stdout)).toMatchObject({ status: 'NOT_RUNNING' });
+    expect(run({ KIOKU_QUIT_TIMEOUT_MS: '1' }).status).toBe(1); // Below range.
   });
 });
 
