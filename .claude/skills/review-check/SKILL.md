@@ -7,7 +7,7 @@ description: Kioku の変更全体を独立レビューし、品質ゲートと�
 
 実装担当と別の reviewer が行う。git history/remote が無ければ架空の diff command を実行せず、Kioku 内の全 file inventory を対象にする。
 
-1. LEV-274 全受入条件と `docs/product-plan.md` を照合。M1+ のカード/保存/AI/復習を作らず、未実装表示が UI/README にあるか。
+1. 対象 issue（LEV-274、LEV-275 …）の全受入条件と `docs/product-plan.md` を照合。その milestone より先の機能（M1 時点ならデッキ/復習/AI）を作らず、未実装表示が UI/README にあるか。
 2. `src/`、manifest/styles、package/lock、scripts/tests、CI/hook、docs/AGENTS、ignore を全件読む。`src/main.ts` は登録/lifecycle、UI は `src/ui`、runtime は公開 Obsidian API/browser code のみか。
 3. path containment の bypass（symlink parent/file、hard link、既存 Vault、任意引数）、部分更新、config/Markdown 上書き、hash の自己申告/stale build、disabled/extra plugin を adversarial に確認する。
 4. test が実装を外すと失敗するか確認する。modal は実 source を bundle した test、tooling は実 file bytes/CLI exit を扱うか。広い lint suppression・skip・snapshot だけの test は不可。

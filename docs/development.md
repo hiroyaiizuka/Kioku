@@ -24,6 +24,6 @@ KIOKU_BASELINE_ID="表示されたUUID" npm run harness:e2e:smoke # 実機担当
 npm run hooks:install      # Git 作成後の任意 hook。check を skip しない
 ```
 
-生成物は `dist/kioku/`、試用 Vault は `test-vault/`、実行証跡は `artifacts/`。すべて git 管理外。`npm run check` は実機を起動せず、実機成功を主張しない。プライマリーは `main` に置き、チケットごとに独立した Git worktree で作業する。main への直接 push は行わず、変更は PR でレビューする。
+生成物は `dist/kioku/`、試用 Vault は `test-vault/`、実行証跡は `artifacts/`。すべて git 管理外。`npm run check` は実機を起動せず、実機成功を主張しない。プライマリーは `main` に置き、チケットごとに独立した Git worktree で作業する。プロジェクト内の `.claude/worktrees/` に作られた worktree は Git 管理外で、primary checkout の lint/test 対象から除外する（build input と validate は `src/` と固定ファイル一覧だけを読むため影響しない）。main への直接 push は行わず、変更は PR でレビューする。
 
 dependency 更新では Node/Obsidian の互換、公式 lint peer、lock、audit を確認する。Obsidian API 型は `manifest.minAppVersion` と同じ。Node security advisory が tooling の local-only test server/型 package にだけある場合も、残る理由と到達可能性をレビューへ記録する。
