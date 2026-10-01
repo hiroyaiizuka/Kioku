@@ -30,10 +30,10 @@ beforeEach(async () => {
 });
 afterEach(() => { dom.window.close(); delete globalThis.document; delete globalThis.window; });
 
-function openNote(text = NOTE, { mode = 'source', extraViews = [] } = {}) {
-  const file = new MockTFile('学習/生物.md'); const editor = new FakeEditor(text);
+function openNote(text = NOTE, { mode = 'source', extraViews = [], editor = new FakeEditor(text) } = {}) {
+  const file = new MockTFile('学習/生物.md');
   const view = new MockMarkdownView(file, editor, mode);
-  const app = createApp({ views: [...extraViews.map((extra) => extra(file)), view], active: view });
+  const app = createApp({ files: { [file.path]: text }, views: [...extraViews.map((extra) => extra(file)), view], active: view });
   const plugin = new Plugin(app); plugin.onload();
   return { app, plugin, file, editor, view };
 }
@@ -168,6 +168,42 @@ describe('adoption through the open editor', () => {
     expect(editor.transactions).toHaveLength(1); expect(preview.editor.transactions).toEqual([]);
   });
 
+  it('writes through Vault.process, not the hidden editor, when the note is open only in Reading view', async () => {
+    const { app, plugin, editor, file } = openNote(NOTE, { mode: 'preview' });
+    extractCommand(plugin).checkCallback(false); await flush();
+    expect(app.calls).toContain(`vault.read:${file.path}`);
+    expect(items()).toHaveLength(2);
+    await click(card(0).querySelector('.kioku-candidate-adopt'));
+    expect(editor.transactions).toEqual([]); expect(editor.getValue()).toBe(NOTE);
+    expect(app.calls).toContain(`vault.process:${file.path}`);
+    expect(app.files[file.path]).toMatch(/A: 光で糖を作る反応 \^kioku-\w{10}\n/);
+    expect(notices[0]).toMatch(/^Kioku：採用しました/);
+  });
+
+  it('writes through the editing view when Reading and Live Preview views are split, in either order', async () => {
+    for (const editingFirst of [true, false]) {
+      dom.window.document.body.replaceChildren(); notices.length = 0;
+      const source = { editor: null };
+      const extra = (file) => { source.editor = new FakeEditor(NOTE); return new MockMarkdownView(file, source.editor, 'source'); };
+      const { app, plugin, editor } = openNote(NOTE, { mode: 'preview', extraViews: editingFirst ? [extra] : [] });
+      if (!editingFirst) app.workspace.getLeavesOfType = () => [{ view: app.workspace.getActiveViewOfType(MockMarkdownView) }, { view: extra(app.workspace.getActiveViewOfType(MockMarkdownView).file) }];
+      extractCommand(plugin).checkCallback(false); await flush();
+      await click(card(0).querySelector('.kioku-candidate-adopt'));
+      expect(source.editor.transactions).toHaveLength(1); expect(editor.transactions).toEqual([]);
+      expect(app.calls.some((call) => call.startsWith('vault.process'))).toBe(false);
+    }
+  });
+
+  it('reports failure instead of success when the editor write cannot be confirmed', async () => {
+    class SwallowingEditor extends FakeEditor { transaction(spec) { this.transactions.push(spec); } }
+    const { plugin, editor } = openNote(NOTE, { editor: new SwallowingEditor(NOTE) });
+    extractCommand(plugin).checkCallback(false);
+    await click(card(0).querySelector('.kioku-candidate-adopt'));
+    expect(editor.transactions).toHaveLength(1);
+    expect(notices).toEqual(['Kioku：保存しませんでした。書き込みを確認できませんでした。ノートを開いて ID が付いたか確認してください。']);
+    expect(card(0).querySelector('.kioku-candidate-meta').textContent).toBe('3 行目 · 未採用');
+  });
+
   it('marks already adopted cards on re-extraction and offers no adopt button', () => {
     const adopted = NOTE.replace('A: 光で糖を作る反応', 'A: 光で糖を作る反応 ^kioku-abcdefghij');
     const { plugin } = openNote(adopted);
@@ -273,6 +309,23 @@ describe('closed note through the file menu', () => {
     await click(card(1).querySelector('.kioku-candidate-adopt'));
     expect(app.files['閉じた.md']).toBe(changed);
     expect(notices[0]).toContain('原文が抽出後に変更');
+  });
+
+  it('reports failure when Vault.process does not produce the planned content', async () => {
+    const { app, menuItems } = closedNote(NOTE);
+    menuItems[0].handler(); await flush();
+    app.vault.process = async (file, fn) => { fn(app.files[file.path]); return app.files[file.path]; };
+    await click(card(0).querySelector('.kioku-candidate-adopt'));
+    expect(notices[0]).toContain('書き込みを確認できませんでした');
+    expect(notices[0]).not.toContain('採用しました');
+  });
+
+  it('reports failure when Vault.process throws', async () => {
+    const { app, menuItems } = closedNote(NOTE);
+    menuItems[0].handler(); await flush();
+    app.vault.process = async () => { throw new Error('disk full'); };
+    await click(card(0).querySelector('.kioku-candidate-adopt'));
+    expect(notices[0]).toBe('Kioku：保存しませんでした。ノートを書き換えられませんでした（disk full）。');
   });
 
   it('ignores non-Markdown files', () => {

@@ -1,7 +1,7 @@
 import { Modal, Notice, type App } from 'obsidian';
 import { normalizeField, type RecordedCandidate } from '../cards/adoption';
 import type { Candidate, CardText } from '../cards/parser';
-import type { AdoptResult } from '../cards/writer';
+import { errorMessage, type AdoptResult } from '../cards/writer';
 
 export interface CandidateModalOptions {
   readonly noteName: string;
@@ -163,7 +163,7 @@ export class CandidateModal extends Modal {
     try {
       result = await this.options.adopt({ start: entry.start, sourceText: entry.candidate.sourceText }, edited);
     } catch (error) {
-      result = { ok: false, reason: error instanceof Error ? error.message : String(error) };
+      result = { ok: false, reason: errorMessage(error) };
     }
     if (!result.ok) {
       entry.state = 'open';

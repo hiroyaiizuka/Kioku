@@ -1,6 +1,6 @@
 import { MarkdownView, Notice, type App, type Modal, type TFile } from 'obsidian';
 import { extractCandidates, type Range } from '../cards/parser';
-import { adoptCandidate, readNote } from '../cards/writer';
+import { adoptCandidate, errorMessage, readNote } from '../cards/writer';
 import { CandidateModal } from './candidate-modal';
 
 /** Lets the plugin close popups on unload without owning their contents. */
@@ -27,12 +27,20 @@ export function hasActiveNote(app: App): boolean {
   return Boolean(app.workspace.getActiveViewOfType(MarkdownView)?.file);
 }
 
-/** Explicit user action: read the active note (or its selection) and show candidates. */
+/**
+ * Explicit user action: read the active note (or its selection) and show candidates.
+ * In Reading view there is no editable selection and the hidden editor is not authoritative,
+ * so the whole note is read from an editing view or the file instead.
+ */
 export function extractFromActiveNote(app: App, tracker: ModalTracker): void {
   const view = app.workspace.getActiveViewOfType(MarkdownView);
   const file = view?.file;
   if (!view || !file) {
     new Notice('Kioku：Markdown ノートを開いてから実行してください。');
+    return;
+  }
+  if (view.getMode() !== 'source') {
+    void extractFromFile(app, file, tracker);
     return;
   }
   const editor = view.editor;
@@ -42,5 +50,12 @@ export function extractFromActiveNote(app: App, tracker: ModalTracker): void {
 
 /** Explicit user action from the file menu: the note may be open (Editor) or closed (Vault). */
 export async function extractFromFile(app: App, file: TFile, tracker: ModalTracker): Promise<void> {
-  openModal(app, file, await readNote(app, file), undefined, tracker);
+  let text: string;
+  try {
+    text = await readNote(app, file);
+  } catch (error) {
+    new Notice(`Kioku：ノートを読めませんでした（${errorMessage(error)}）。`);
+    return;
+  }
+  openModal(app, file, text, undefined, tracker);
 }
