@@ -4,7 +4,7 @@ import { classifyLines, type ExclusionKind } from './regions';
 export const CARD_ID_PREFIX = 'kioku-';
 export const EDIT_RECORD_PREFIX = '%%kioku-edit:';
 
-const QUESTION = /^(?:[-*+][ \t]+)?(?:Q|Ｑ|問)[ \t]*[:：][ \t]*(.*)$/u;
+const QUESTION = /^\uFEFF?(?:[-*+][ \t]+)?(?:Q|Ｑ|問)[ \t]*[:：][ \t]*(.*)$/u;
 const ANSWER = /^(?:[-*+][ \t]+)?(?:A|Ａ|答)[ \t]*[:：][ \t]*(.*)$/u;
 const HEADING = /^#{1,6}(?:[ \t]|$)/;
 const RULE = /^\s*(?:-{3,}|\*{3,}|_{3,}|={3,})\s*$/;
@@ -28,6 +28,11 @@ export interface RawBlock extends CardText {
   readonly sourceText: string;
   /** Trailing Obsidian block ID of the last line, without `^`. */
   readonly blockId: string | null;
+  /**
+   * The line after the block is non-blank text (next Q, second A, `---`, excluded text…).
+   * Adoption then inserts one blank line so the block ID ends a paragraph.
+   */
+  readonly needsBlankLine: boolean;
 }
 
 export type CandidateStatus = 'new' | 'adopted' | 'duplicate-id' | 'foreign-block-id';
@@ -72,14 +77,17 @@ export function findBlocks(lines: readonly Line[], kinds: readonly ExclusionKind
         answerLine = next;
       }
     }
-    const block = answerLine < 0 ? null : readBlock(lines, index, answerLine, next - 1);
+    const after = lines[next];
+    const block = answerLine < 0 ? null
+      : readBlock(lines, index, answerLine, next - 1, after !== undefined && !isBlank(after.text));
     if (block) blocks.push(block);
     index = next;
   }
   return blocks;
 }
 
-function readBlock(lines: readonly Line[], first: number, answerLine: number, last: number): RawBlock | null {
+function readBlock(lines: readonly Line[], first: number, answerLine: number, last: number,
+  needsBlankLine: boolean): RawBlock | null {
   const firstLine = lines[first];
   const lastLine = lines[last];
   if (!firstLine || !lastLine) return null;
@@ -97,7 +105,7 @@ function readBlock(lines: readonly Line[], first: number, answerLine: number, la
   const card = { question: fieldText(question), answer: fieldText(answer) };
   if (!card.question || !card.answer) return null;
   const sourceText = lines.slice(first, last).map((line) => line.text + line.eol).join('') + lastText;
-  return { ...card, start: firstLine.start, end: lastLine.end, line: first, blockId, sourceText };
+  return { ...card, start: firstLine.start, end: lastLine.end, line: first, blockId, sourceText, needsBlankLine };
 }
 
 /** Reads `%%kioku-edit:<id>` records. Only comment lines can hold a record. */

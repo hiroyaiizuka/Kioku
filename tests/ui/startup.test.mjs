@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { compilePlugin, installDom } from '../helpers/obsidian-mock.mjs';
+import { MockTFile, compilePlugin, installDom } from '../helpers/obsidian-mock.mjs';
 
 /** Every note-related API throws and is recorded; only event registration (`workspace.on`) is allowed. */
 function denyNoteIO(calls, path) {
@@ -14,6 +14,21 @@ function deniedApp() {
   const ioCalls = [];
   return { ioCalls, vault: denyNoteIO(ioCalls, 'vault'), workspace: denyNoteIO(ioCalls, 'workspace'),
     metadataCache: denyNoteIO(ioCalls, 'metadataCache') };
+}
+/**
+ * Fires every registered workspace event the way Obsidian could at any time. The file-menu
+ * callback only builds menu items (never clicked here); none of them may touch notes.
+ */
+function fireRegisteredEvents(plugin) {
+  const titles = [];
+  for (const event of plugin.events) {
+    if (event.name === 'file-menu') {
+      const menu = { addItem(build) { const item = { setTitle(title) { titles.push(title); return item; },
+        setIcon: () => item, onClick: () => item }; build(item); } };
+      event.callback(menu, new MockTFile('Welcome.md'));
+    } else event.callback();
+  }
+  return titles;
 }
 let dom;
 let Plugin;
@@ -30,6 +45,7 @@ describe('actual plugin source: startup and status popup', () => {
     expect(plugin.ribbons).toHaveLength(1); expect(plugin.ribbons[0].getAttribute('aria-label')).toBe('フラッシュカード');
     expect(plugin.commands.map((command) => command.id)).toEqual(['open-startup', 'extract-explicit-qa']);
     expect(plugin.events.map((event) => event.name)).toEqual(['file-menu']);
+    expect(fireRegisteredEvents(plugin)).toEqual(['Kioku：問い・答えの候補を抽出']);
     plugin.ribbons[0].click(); plugin.commands[0].callback();
     const modals = document.querySelectorAll('.kioku-startup-modal'); expect(modals).toHaveLength(1);
     expect(modals[0].textContent).toContain('採用したものだけ元ノートへ保存');
@@ -53,6 +69,14 @@ describe('actual plugin source: startup and status popup', () => {
     const Mutant = await compilePlugin(source, notices); const app = deniedApp(); const plugin = new Mutant(app);
     expect(() => plugin.onload()).toThrow(/forbids note I\/O/);
     expect(app.ioCalls.map((call) => call.method)).toEqual(['vault.getFileByPath']);
+  });
+  it('detects a mutant that reads notes from a registered workspace event', async () => {
+    const source = readFileSync('src/main.ts', 'utf8').replace('ribbon.addClass(\'kioku-ribbon\');',
+      "ribbon.addClass('kioku-ribbon'); this.registerEvent(this.app.workspace.on('layout-change', () => extract()));");
+    const Mutant = await compilePlugin(source, notices); const app = deniedApp(); const plugin = new Mutant(app);
+    plugin.onload(); expect(app.ioCalls).toEqual([]);
+    expect(() => fireRegisteredEvents(plugin)).toThrow(/forbids note I\/O/);
+    expect(app.ioCalls.map((call) => call.method)).toEqual(['workspace.getActiveViewOfType']);
   });
   it('detects a startup-read mutant that extracts from the active note during onload', async () => {
     const source = readFileSync('src/main.ts', 'utf8').replace('ribbon.addClass(\'kioku-ribbon\');',

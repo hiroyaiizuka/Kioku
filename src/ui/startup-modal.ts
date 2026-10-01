@@ -19,7 +19,7 @@ export class StartupModal extends Modal {
     this.modalEl.addClass('kioku-startup-modal');
     this.setTitle('Kioku — 状態');
     this.contentEl.createEl('p', {
-      text: 'M1：開いているノート（または選択範囲）の明示 Q/A を候補として確認・編集し、採用したものだけ元ノートへ保存できます。',
+      text: 'M1：開いているノート（または選択範囲）に明示した問い・答えを候補として確認・編集し、採用したものだけ元ノートへ保存できます。',
       cls: 'kioku-startup-status',
     });
     this.contentEl.createEl('p', {
@@ -34,7 +34,7 @@ export class StartupModal extends Modal {
     build.dataset.kiokuBuildId = this.identity.buildId;
     build.dataset.kiokuVersion = this.identity.version;
     const actions = this.contentEl.createDiv({ cls: 'kioku-startup-actions' });
-    const extract = actions.createEl('button', { text: '開いているノートから Q/A 候補を抽出', cls: 'mod-cta kioku-startup-extract' });
+    const extract = actions.createEl('button', { text: '開いているノートから問い・答えの候補を抽出', cls: 'mod-cta kioku-startup-extract' });
     extract.addEventListener('click', () => {
       this.close();
       this.onExtract();

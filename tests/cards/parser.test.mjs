@@ -119,6 +119,46 @@ describe('exclusions keep code, comments, frontmatter and Excalidraw data out', 
     expect(pick(extractCandidates(note))).toEqual([{ question: '本物 %%inline%%', answer: 'はい', status: 'new' }]);
   });
 
+  it('closes a fence only with the same character and at least the opening length', () => {
+    const longer = ['````', '```', 'Q: still code', 'A: no', '````', 'Q: after', 'A: yes'].join('\n');
+    expect(pick(extractCandidates(longer)).map((item) => item.question)).toEqual(['after']);
+    const kind = ['```', '~~~', 'Q: still code', 'A: no', '```', 'Q: after', 'A: yes'].join('\n');
+    expect(pick(extractCandidates(kind)).map((item) => item.question)).toEqual(['after']);
+  });
+
+  it('skips HTML comments and $$ math blocks, single- and multi-line', () => {
+    const note = [
+      '<!--',
+      'Q: in html comment',
+      'A: no',
+      '-->',
+      '<!-- one line --> ',
+      'Q: 本物1',
+      'A: はい',
+      '',
+      'x <!-- open',
+      'Q: in comment',
+      'A: no',
+      'close --> <!-- reopen',
+      'Q: still comment',
+      'A: no',
+      '-->',
+      '$$',
+      'Q: in math',
+      'A: no',
+      '$$',
+      'Q: 本物2 $$x$$',
+      'A: はい',
+    ].join('\n');
+    expect(pick(extractCandidates(note)).map((item) => item.question)).toEqual(['本物1', '本物2 $$x$$']);
+  });
+
+  it('handles a UTF-8 BOM before frontmatter or a first-line question', () => {
+    expect(extractCandidates('\uFEFF---\nQ: in fm\nA: no\n---\nQ: 本物\nA: はい').map((item) => item.question)).toEqual(['本物']);
+    const [first] = extractCandidates('\uFEFFQ: 先頭\nA: はい');
+    expect(first).toMatchObject({ question: '先頭', start: 0 });
+  });
+
   it('excludes an unclosed fence to the end of the note, but an unclosed frontmatter is ordinary text', () => {
     expect(extractCandidates('Q: a\nA: b\n```\nQ: c\nA: d')).toHaveLength(1);
     expect(extractCandidates('---\nQ: a\nA: b')).toHaveLength(1);
@@ -176,6 +216,15 @@ describe('adoption markers and duplicate detection', () => {
     const candidates = extractCandidates(note);
     expect(candidates).toHaveLength(1);
     expect(candidates[0].edit).toEqual({ question: '編集後', answer: '編集後の答え' });
+  });
+
+  it('reads edit records only from real %% comments, never from code blocks', () => {
+    const note = ['Q: 原文', 'A: 答え ^kioku-abcdefghij', '', '```', '%%kioku-edit:kioku-abcdefghij', 'Q: 偽', 'A: 偽', '%%', '```'].join('\n');
+    expect(extractCandidates(note)[0].edit).toBeNull();
+  });
+
+  it('flags blocks that are directly followed by text as needing a blank line', () => {
+    expect(extractCandidates('Q: a\nA: b\nQ: c\nA: d\n\nQ: e\nA: f').map((item) => item.needsBlankLine)).toEqual([true, false, false]);
   });
 
   it('marks copied kioku IDs as duplicate and foreign block IDs as not adoptable', () => {

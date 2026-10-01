@@ -74,6 +74,30 @@ describe('planAdoption: verify then insert once, never rewriting the original', 
     expect(extractCandidates(plan.next).map((item) => [item.question, item.status])).toEqual([['a', 'adopted'], ['c', 'new']]);
   });
 
+  it('inserts exactly one blank line when non-blank text follows, so the ID ends a paragraph (edited or not)', () => {
+    const cases = [
+      ['Q: a\nA: b\nQ: c\nA: d', 'Q: a\nA: b ^kioku-0123456789\n\nQ: c\nA: d'],
+      ['Q: a\nA: b\nA: 2つ目\n', 'Q: a\nA: b ^kioku-0123456789\n\nA: 2つ目\n'],
+      ['Q: a\nA: b\n---\n本文', 'Q: a\nA: b ^kioku-0123456789\n\n---\n本文'],
+      ['Q: a\r\nA: b\r\n```\r\ncode\r\n```', 'Q: a\r\nA: b ^kioku-0123456789\r\n\r\n```\r\ncode\r\n```'],
+      ['Q: a\nA: b\n## 見出し', 'Q: a\nA: b ^kioku-0123456789\n\n## 見出し'],
+      ['Q: a\nA: b\n\n本文', 'Q: a\nA: b ^kioku-0123456789\n\n本文'],
+      ['Q: a\nA: b\n', 'Q: a\nA: b ^kioku-0123456789\n'],
+      ['Q: a\nA: b', 'Q: a\nA: b ^kioku-0123456789'],
+    ];
+    for (const [note, expected] of cases) {
+      const candidate = extractCandidates(note)[0];
+      const plan = planAdoption(note, record(candidate), same(candidate), ID_A);
+      expect(plan.next).toBe(expected);
+      // Original characters are untouched: removing the inserted text gives the note back.
+      expect(plan.next.slice(0, plan.offset) + plan.next.slice(plan.offset + plan.insert.length)).toBe(note);
+      expect(extractCandidates(plan.next)[0]).toMatchObject({ status: 'adopted', needsBlankLine: false });
+    }
+    const crlf = 'Q: a\r\nA: b\r\nQ: c\r\nA: d';
+    const edited = planAdoption(crlf, record(extractCandidates(crlf)[0]), { question: 'a2', answer: 'b' }, ID_A);
+    expect(edited.next).toBe('Q: a\r\nA: b ^kioku-0123456789\r\n\r\n%%kioku-edit:kioku-0123456789\r\nQ: a2\r\nA: b\r\n%%\r\n\r\nQ: c\r\nA: d');
+  });
+
   it('relocates a uniquely matching original after an external edit above it', () => {
     const note = 'intro\nQ: 問い\nA: 答え';
     const recorded = record(extractCandidates(note)[0]);
@@ -124,12 +148,19 @@ describe('planAdoption: verify then insert once, never rewriting the original', 
       [{ question: 'x', answer: '一行目\n\n三行目' }, '空行'],
       [{ question: 'x', answer: '一行目\nQ: 次の問い' }, '空行'],
       [{ question: 'x', answer: '一行目\n# 見出し' }, '空行'],
+      [{ question: 'x', answer: 'y\n```' }, 'コードブロック'],
+      [{ question: 'x', answer: 'y\n  ~~~js' }, 'コードブロック'],
+      [{ question: 'x', answer: '$$a^2$$' }, '$$'],
+      [{ question: 'x <!-- memo', answer: 'y' }, 'HTML'],
+      [{ question: 'x', answer: 'y -->' }, 'HTML'],
     ]) {
       const plan = planAdoption(note, recorded, edit, ID_A);
       expect(plan.ok).toBe(false);
       expect(plan.reason).toContain(reason);
     }
     expect(validateEdit({ question: '- 箇条書き', answer: '答え\n- 続き' })).toBeNull();
+    expect(validateEdit({ question: 'x', answer: 'y\n```' })).not.toBeNull();
+    expect(validateEdit({ question: 'inline `code` と $x$', answer: 'y' })).toBeNull();
     expect(normalizeField('  a  \r\n b \n')).toBe('a\n b');
   });
 

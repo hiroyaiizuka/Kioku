@@ -51,7 +51,7 @@ describe('extraction popup', () => {
     expect(editor.transactions).toEqual([]);
     extractCommand(plugin).checkCallback(false);
     expect(document.querySelectorAll('.kioku-candidate-modal')).toHaveLength(1);
-    expect(document.querySelector('.kioku-candidate-modal h2').textContent).toBe('Q/A 候補 — 生物');
+    expect(document.querySelector('.kioku-candidate-modal h2').textContent).toBe('問い・答えの候補 — 生物');
     expect(items().map((item) => item.querySelector('.kioku-candidate-source').textContent))
       .toEqual(['Q: 光合成とは？\nA: 光で糖を作る反応', '問：細胞の基本単位は？\n答：細胞']);
     expect(items().map((item) => item.querySelector('.kioku-candidate-meta').textContent))
@@ -96,7 +96,7 @@ describe('extraction popup', () => {
   it('shows a syntax hint when nothing is found', () => {
     const { plugin } = openNote('# 空\n本文だけ');
     extractCommand(plugin).checkCallback(false);
-    expect(document.querySelector('.kioku-candidate-empty').textContent).toContain('「Q:」または「問:」');
+    expect(document.querySelector('.kioku-candidate-empty').textContent).toContain('行頭にQ:（または「問:」）とA:（または「答:」）');
   });
 });
 
@@ -177,6 +177,53 @@ describe('adoption through the open editor', () => {
     expect(card(1).querySelector('.kioku-candidate-adopt')).not.toBeNull();
   });
 
+  it('ignores a second adopt click while the first is saving (no double write, no false error)', async () => {
+    const { plugin, editor } = openNote();
+    extractCommand(plugin).checkCallback(false);
+    const button = card(0).querySelector('.kioku-candidate-adopt');
+    button.click(); button.click(); await flush(); await flush();
+    expect(editor.transactions).toHaveLength(1);
+    expect(notices).toHaveLength(1); expect(notices[0]).toMatch(/採用しました/);
+    expect(card(0).querySelector('.kioku-candidate-meta').textContent).toMatch(/採用済み · kioku-/);
+  });
+
+  it('announces and inserts one blank line when text follows the block directly', async () => {
+    const note = 'Q: 一つ目\nA: 答え1\nQ: 二つ目\nA: 答え2';
+    const { plugin, editor } = openNote(note);
+    extractCommand(plugin).checkCallback(false);
+    expect(card(0).querySelector('.kioku-candidate-note').textContent).toContain('空行を1行追加');
+    expect(card(1).querySelector('.kioku-candidate-note')).toBeNull();
+    await click(card(0).querySelector('.kioku-candidate-adopt'));
+    expect(editor.getValue()).toMatch(/^Q: 一つ目\nA: 答え1 \^kioku-\w{10}\n\nQ: 二つ目\nA: 答え2$/);
+    await click(card(1).querySelector('.kioku-candidate-adopt'));
+    expect(editor.getValue()).toMatch(/^Q: 一つ目\nA: 答え1 \^kioku-\w{10}\n\nQ: 二つ目\nA: 答え2 \^kioku-\w{10}$/);
+  });
+
+  it('shows duplicate-ID and foreign-block-ID blocks as non-adoptable, not as adopted cards', () => {
+    const note = 'Q: a\nA: b ^kioku-abcdefghij\n\nQ: a\nA: b ^kioku-abcdefghij\n\nQ: c\nA: d ^mine';
+    const { plugin } = openNote(note);
+    extractCommand(plugin).checkCallback(false);
+    expect(items().map((item) => item.querySelector('.kioku-candidate-meta').textContent)).toEqual([
+      '1 行目 · ID 重複のため採用不可 · kioku-abcdefghij', '4 行目 · ID 重複のため採用不可 · kioku-abcdefghij',
+      '7 行目 · 既存の block ID があるため採用不可']);
+    for (const item of items()) {
+      expect(item.querySelector('.kioku-candidate-card')).toBeNull();
+      expect(item.querySelector('.kioku-candidate-adopt')).toBeNull();
+      expect(item.querySelector('.kioku-candidate-blocked')).not.toBeNull();
+    }
+  });
+
+  it('keeps the list scroll position after adopt and discard re-render the list', async () => {
+    const { plugin } = openNote();
+    extractCommand(plugin).checkCallback(false);
+    const list = () => document.querySelector('.kioku-candidate-list');
+    list().scrollTop = 120;
+    await click(card(0).querySelector('.kioku-candidate-adopt'));
+    expect(list().scrollTop).toBe(120);
+    await click(card(1).querySelector('.kioku-candidate-discard'));
+    expect(list().scrollTop).toBe(120);
+  });
+
   it('closes candidate popups on unload', () => {
     const { plugin } = openNote();
     extractCommand(plugin).checkCallback(false);
@@ -199,7 +246,7 @@ describe('closed note through the file menu', () => {
   it('reads with Vault and adopts with Vault.process only on adopt', async () => {
     const { app, menuItems } = closedNote(NOTE);
     expect(app.calls).toEqual([]);
-    expect(menuItems.map((item) => item.title)).toEqual(['Kioku：Q/A 候補を抽出']);
+    expect(menuItems.map((item) => item.title)).toEqual(['Kioku：問い・答えの候補を抽出']);
     menuItems[0].handler(); await flush();
     expect(app.calls).toEqual(['workspace.getLeavesOfType', 'vault.read:閉じた.md']);
     await click(card(0).querySelector('.kioku-candidate-adopt'));

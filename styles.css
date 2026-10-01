@@ -80,3 +80,9 @@
   justify-content: flex-end;
   margin-top: var(--size-4-2);
 }
+
+.kioku-candidate-modal .kioku-candidate-note,
+.kioku-candidate-modal .kioku-candidate-blocked {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}

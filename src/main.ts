@@ -25,7 +25,7 @@ export default class KiokuPlugin extends Plugin {
     });
     this.addCommand({
       id: 'extract-explicit-qa',
-      name: '開いているノート・選択範囲から Q/A 候補を抽出',
+      name: '開いているノート・選択範囲から問い・答えの候補を抽出',
       checkCallback: (checking) => {
         if (!hasActiveNote(this.app)) return false;
         if (!checking) extract();
@@ -34,7 +34,7 @@ export default class KiokuPlugin extends Plugin {
     });
     this.registerEvent(this.app.workspace.on('file-menu', (menu, file) => {
       if (!(file instanceof TFile) || file.extension !== 'md') return;
-      menu.addItem((item) => item.setTitle('Kioku：Q/A 候補を抽出').setIcon('gallery-vertical-end')
+      menu.addItem((item) => item.setTitle('Kioku：問い・答えの候補を抽出').setIcon('gallery-vertical-end')
         .onClick(() => { void extractFromFile(this.app, file, tracker); }));
     }));
   }

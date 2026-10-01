@@ -23,7 +23,8 @@ interface Entry {
   readonly candidate: Candidate;
   /** Recorded offset, shifted after earlier adoptions in this popup. */
   start: number;
-  state: 'open' | 'saving' | 'adopted' | 'discarded';
+  /** `blocked`: duplicate Kioku ID or a foreign block ID; shown but never adoptable. */
+  state: 'open' | 'saving' | 'adopted' | 'discarded' | 'blocked';
   cardId: string | null;
   /** The text in the edit fields; survives re-rendering and failed writes. */
   draft: CardText;
@@ -41,7 +42,9 @@ export class CandidateModal extends Modal {
     super(app);
     this.entries = options.candidates.map((candidate) => {
       const card = candidate.edit ?? { question: candidate.question, answer: candidate.answer };
-      return { candidate, start: candidate.start, state: candidate.status === 'new' ? 'open' : 'adopted',
+      const state: Entry['state'] = candidate.status === 'new' ? 'open'
+        : candidate.status === 'adopted' ? 'adopted' : 'blocked';
+      return { candidate, start: candidate.start, state,
         cardId: candidate.cardId, draft: { question: candidate.question, answer: candidate.answer }, card, message: '' };
     });
   }
@@ -49,7 +52,7 @@ export class CandidateModal extends Modal {
   override onOpen(): void {
     this.shown = true;
     this.modalEl.addClass('kioku-candidate-modal');
-    this.setTitle(`Q/A 候補 — ${this.options.noteName}`);
+    this.setTitle(`問い・答えの候補 — ${this.options.noteName}`);
     this.render();
   }
 
@@ -62,19 +65,19 @@ export class CandidateModal extends Modal {
   private render(): void {
     if (!this.shown) return;
     const { contentEl } = this;
+    // Keep the reader's place in a long list across re-renders after adopt / discard.
+    const scrollTop = contentEl.querySelector('.kioku-candidate-list')?.scrollTop ?? 0;
     contentEl.empty();
     const scope = this.options.scope === 'selection' ? '選択範囲' : 'ノート全体';
     const pending = this.entries.filter((entry) => entry.state === 'open').length;
     contentEl.createEl('p', { cls: 'kioku-candidate-summary',
-      text: `${scope}の明示 Q/A：${this.entries.length} 件（未採用 ${pending} 件）。採用したものだけ元ノートに ID を追記します。破棄・閉じるでは何も書き込みません。` });
-    if (!this.entries.length) {
-      contentEl.createEl('p', { cls: 'kioku-candidate-empty',
-        text: '明示 Q/A が見つかりませんでした。行頭の「Q:」または「問:」と、「A:」または「答:」で書いたブロックが対象です。コードブロック・コメント（%%）・Excalidraw の描画データは対象外です。' });
-    }
+      text: `${scope}の明示した問い・答え：${this.entries.length} 件（未採用 ${pending} 件）。採用したものだけ元ノートに ID を追記します。破棄・閉じるでは何も書き込みません。` });
+    if (!this.entries.length) this.renderSyntaxHint(contentEl);
     const list = contentEl.createDiv({ cls: 'kioku-candidate-list' });
     for (const entry of this.entries) {
       if (entry.state !== 'discarded') this.renderEntry(list, entry);
     }
+    list.scrollTop = scrollTop;
     const footer = contentEl.createDiv({ cls: 'kioku-candidate-footer' });
     const close = footer.createEl('button', { text: '閉じる', cls: 'kioku-candidate-close' });
     close.addEventListener('click', () => this.close());
@@ -84,7 +87,7 @@ export class CandidateModal extends Modal {
     const { candidate } = entry;
     const item = list.createDiv({ cls: 'kioku-candidate' });
     item.dataset.kiokuLine = String(candidate.line + 1);
-    const status = entry.state === 'adopted' && candidate.status === 'new' ? '採用済み' : STATUS_LABEL[candidate.status];
+    const status = entry.state === 'adopted' ? '採用済み' : STATUS_LABEL[candidate.status];
     item.createDiv({ cls: 'kioku-candidate-meta', text: `${candidate.line + 1} 行目 · ${status}${entry.cardId ? ` · ${entry.cardId}` : ''}` });
     if (candidate.sameAsAdopted && entry.state === 'open') {
       item.createDiv({ cls: 'kioku-candidate-warning', text: '採用済みカードと同じ内容です。' });
@@ -96,13 +99,23 @@ export class CandidateModal extends Modal {
       item.createEl('pre', { cls: 'kioku-candidate-card', text: `Q: ${entry.card.question}\nA: ${entry.card.answer}` });
       return;
     }
-    if (candidate.status !== 'new') return;
+    if (entry.state === 'blocked') {
+      item.createDiv({ cls: 'kioku-candidate-blocked',
+        text: candidate.status === 'duplicate-id'
+          ? '同じ Kioku ID が複数のブロックにあります。どちらかの ID を消してから再抽出してください。'
+          : 'このブロックには既に別の block ID があり、Kioku の ID を追記できません。' });
+      return;
+    }
     this.field(item, '問い', entry.draft.question, 'kioku-candidate-question', (value) => {
       entry.draft = { ...entry.draft, question: value };
     });
     this.field(item, '答え', entry.draft.answer, 'kioku-candidate-answer', (value) => {
       entry.draft = { ...entry.draft, answer: value };
     });
+    if (candidate.needsBlankLine) {
+      item.createDiv({ cls: 'kioku-candidate-note',
+        text: '直後に文があるため、採用時にこのブロックの後へ空行を1行追加します（ID を段落末に置くため。原文の文字は変えません）。' });
+    }
     item.createDiv({ cls: 'kioku-candidate-message', text: entry.message });
     const actions = item.createDiv({ cls: 'kioku-candidate-actions' });
     const adopt = actions.createEl('button', { text: '採用', cls: 'mod-cta kioku-candidate-adopt' });
@@ -117,6 +130,15 @@ export class CandidateModal extends Modal {
     adopt.addEventListener('click', () => {
       void this.adopt(entry);
     });
+  }
+
+  private renderSyntaxHint(parent: HTMLElement): void {
+    const hint = parent.createEl('p', { cls: 'kioku-candidate-empty' });
+    hint.createSpan({ text: '明示した問い・答えが見つかりませんでした。対象は、行頭に' });
+    hint.createEl('code', { text: 'Q:' });
+    hint.createSpan({ text: '（または「問:」）と' });
+    hint.createEl('code', { text: 'A:' });
+    hint.createSpan({ text: '（または「答:」）を書いたブロックです。コードブロック・コメント・数式・Excalidraw の描画データは対象外です。' });
   }
 
   private field(parent: HTMLElement, label: string, value: string, cls: string, update: (value: string) => void): void {

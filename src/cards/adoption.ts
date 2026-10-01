@@ -1,5 +1,5 @@
 import { generateCardId, type RandomBytes } from './card-id';
-import { detectEol, isBlank, splitLines } from './lines';
+import { detectEol, splitLines } from './lines';
 import { EDIT_RECORD_PREFIX, existingCardIds, extractCandidates, findBlocks, type Candidate, type CardText } from './parser';
 
 /** What the modal remembers about a candidate between extraction and the adopt click. */
@@ -31,6 +31,9 @@ export function validateEdit(card: CardText): string | null {
   const joined = `${card.question}\n${card.answer}`;
   if (joined.includes('%%')) return '「%%」は編集記録に含められません。';
   if (/\^kioku-/.test(joined)) return '「^kioku-」は編集記録に含められません。';
+  if (joined.split('\n').some((line) => /^\s*(?:`{3,}|~{3,})/.test(line))) return 'コードブロックの区切り（``` や ~~~）は編集記録に含められません。';
+  if (joined.includes('$$')) return '「$$」は編集記録に含められません。';
+  if (joined.includes('<!--') || joined.includes('-->')) return 'HTML コメントは編集記録に含められません。';
   const lines = splitLines(serializeCard(card, '\n'));
   const parsed = findBlocks(lines, lines.map(() => null));
   const only = parsed[0];
@@ -75,12 +78,10 @@ export function planAdoption(text: string, recorded: RecordedCandidate, edited: 
   const cardId = generateCardId(existingCardIds(text), random);
   const eol = detectEol(text);
   let insert = ` ^${cardId}`;
-  if (changed) {
-    insert += `${eol}${eol}${EDIT_RECORD_PREFIX}${cardId}${eol}${serializeCard(edit, eol)}${eol}%%`;
-    const after = text.slice(target.end);
-    const nextLine = splitLines(after)[1];
-    if (nextLine && !isBlank(nextLine.text)) insert += eol;
-  }
+  if (changed) insert += `${eol}${eol}${EDIT_RECORD_PREFIX}${cardId}${eol}${serializeCard(edit, eol)}${eol}%%`;
+  // The block (or its edit record) must end a paragraph so `^kioku-…` is a valid block ID:
+  // when non-blank text follows directly, add exactly one line break (a blank line).
+  if (target.needsBlankLine) insert += eol;
   const offset = target.end;
   return { ok: true, cardId, offset, insert, next: text.slice(0, offset) + insert + text.slice(offset) };
 }
