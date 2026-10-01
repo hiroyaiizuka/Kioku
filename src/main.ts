@@ -1,5 +1,6 @@
 import { Plugin, TFile, type Modal } from 'obsidian';
 import { extractFromActiveNote, extractFromFile, hasActiveNote, type ModalTracker } from './ui/extract';
+import { CandidateModal } from './ui/candidate-modal';
 import { StartupModal } from './ui/startup-modal';
 
 export default class KiokuPlugin extends Plugin {
@@ -42,7 +43,10 @@ export default class KiokuPlugin extends Plugin {
   override onunload(): void {
     this.startupModal?.close();
     this.startupModal = null;
-    for (const modal of [...this.openModals]) modal.close();
+    for (const modal of [...this.openModals]) {
+      if (modal instanceof CandidateModal) modal.closeSilently();
+      else modal.close();
+    }
     this.openModals.clear();
   }
 }

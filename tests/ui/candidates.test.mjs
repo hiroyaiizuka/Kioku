@@ -317,6 +317,18 @@ describe('open Canvas embeds (pre-write guard)', () => {
     expect(app.files[file.path]).toMatch(/\^kioku-\w{10}/); expect(notices[0]).toMatch(/^Kioku：採用しました/);
   });
 
+  it('still refuses when a Canvas leaf without a loaded file comes before the embedding Canvas', async () => {
+    const { app, plugin, file } = openNote(NOTE, { mode: 'preview',
+      canvases: { 'board.canvas': canvas([{ id: 'n2', type: 'file', file: '学習/生物.md' }]) } });
+    const leaves = app.workspace.getLeavesOfType;
+    // A deferred (not yet loaded) canvas leaf has no TFile; it must be skipped, not end the scan.
+    app.workspace.getLeavesOfType = (type) => (type === 'canvas' ? [{ view: { file: null } }, { view: { file: { path: 'x.canvas' } } }, ...leaves(type)] : leaves(type));
+    extractCommand(plugin).checkCallback(false); await flush();
+    await click(card(0).querySelector('.kioku-candidate-adopt'));
+    expect(notices).toEqual([`Kioku：保存しませんでした。${EMBEDDED}`]);
+    expect(app.files[file.path]).toBe(NOTE);
+  });
+
   it('refuses when an open Canvas cannot be read as JSON', async () => {
     const { app, plugin, file } = openNote(NOTE, { mode: 'preview', canvases: { 'board.canvas': '{broken' } });
     extractCommand(plugin).checkCallback(false); await flush();
@@ -377,8 +389,9 @@ describe('post-write disk confirmation', () => {
     expect(app.calls.some((call) => call.startsWith('vault.process'))).toBe(false);
   });
 
+  const PENDING_CLOSE = 'Kioku：保存の確認前に閉じました。もう一度抽出して採用済みか確認してください。';
   for (const how of ['close', 'unload']) {
-    it(`cancels the pending confirmation on ${how} without notices or leftover timers`, async () => {
+    it(`cancels the pending confirmation on ${how} without leftover timers (one Notice on close, none on unload)`, async () => {
       const { plugin } = openNote(NOTE, { mode: 'preview' });
       extractCommand(plugin).checkCallback(false); await flush();
       card(0).querySelector('.kioku-candidate-adopt').click();
@@ -386,10 +399,42 @@ describe('post-write disk confirmation', () => {
       if (how === 'close') document.querySelector('.kioku-candidate-close').click(); else plugin.onunload();
       expect(vi.getTimerCount()).toBe(0);
       await settle();
-      expect(notices).toEqual([]);
+      expect(notices).toEqual(how === 'close' ? [PENDING_CLOSE] : []);
       expect(document.querySelector('.kioku-candidate-modal')).toBeNull();
     });
   }
+
+  it('shows no pending Notice when closing after the confirmation finished', async () => {
+    const { plugin } = openNote(NOTE, { mode: 'preview' });
+    extractCommand(plugin).checkCallback(false); await flush();
+    await click(card(0).querySelector('.kioku-candidate-adopt'));
+    document.querySelector('.kioku-candidate-close').click();
+    expect(notices).toHaveLength(1); expect(notices[0]).toMatch(/^Kioku：採用しました/);
+  });
+
+  it('treats a throwing confirmation as a lost write, never as success', async () => {
+    const { app, plugin } = openNote(NOTE, { mode: 'preview' });
+    extractCommand(plugin).checkCallback(false); await flush();
+    const leaves = app.workspace.getLeavesOfType;
+    let calls = 0;
+    // The 3rd workspace query is the one inside confirmAdoption (after the canvas guard and the write path choice).
+    app.workspace.getLeavesOfType = (type) => { calls += 1; if (calls === 3) throw new Error('boom'); return leaves(type); };
+    await click(card(0).querySelector('.kioku-candidate-adopt'));
+    expect(calls).toBeGreaterThanOrEqual(3);
+    expect(notices).toEqual(['Kioku：採用を確認できませんでした。保存後に ID が見つかりません。別の画面の保存で上書きされた可能性があります。もう一度抽出してください。']);
+    expect(card(0).querySelector('.kioku-candidate-meta').textContent).toBe('3 行目 · 未採用');
+  });
+
+  it('does not count a duplicated ID (copied block) as a confirmed adoption', async () => {
+    const { app, plugin, file } = openNote(NOTE, { mode: 'preview' });
+    extractCommand(plugin).checkCallback(false); await flush();
+    card(0).querySelector('.kioku-candidate-adopt').click();
+    await vi.advanceTimersByTimeAsync(300);
+    const id = app.files[file.path].match(/\^(kioku-\w{10})/)[1];
+    app.files[file.path] += `\nQ: copy\nA: copy ^${id}\n`;
+    await settle();
+    expect(notices[0]).toMatch(/^Kioku：採用を確認できませんでした。/);
+  });
 });
 
 describe('closed note through the file menu', () => {

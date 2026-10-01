@@ -40,6 +40,7 @@ interface Entry {
 export class CandidateModal extends Modal {
   private readonly entries: Entry[];
   private shown = false;
+  private silent = false;
   private readonly lifetime = new AbortController();
 
   constructor(app: App, private readonly options: CandidateModalOptions) {
@@ -60,7 +61,20 @@ export class CandidateModal extends Modal {
     this.render();
   }
 
+  /**
+   * Closes without the pending-confirmation Notice. Used on plugin unload (disable / app quit),
+   * where a Notice would be noisy or never seen.
+   */
+  closeSilently(): void {
+    this.silent = true;
+    this.close();
+  }
+
   override onClose(): void {
+    // A write may already be on disk but unconfirmed: say so once instead of staying silent.
+    if (!this.silent && this.busy()) {
+      new Notice('Kioku：保存の確認前に閉じました。もう一度抽出して採用済みか確認してください。');
+    }
     this.shown = false;
     this.lifetime.abort();
     this.contentEl.empty();
