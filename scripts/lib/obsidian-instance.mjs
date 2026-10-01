@@ -314,7 +314,9 @@ async function launchLocked(root, env, system, paths) {
     page = await system.waitForDedicatedPage({ port, vault: expected.vault, version: profile.version,
       alive: () => isAlive(child.pid, system) });
   } catch (error) {
-    if (!isAlive(child.pid, system) && readState(root)?.pid === child.pid) clearState(root);
+    let ours = false;
+    try { ours = readState(root)?.pid === child.pid; } catch { ours = false; } // Never mask the original error.
+    if (ours && !isAlive(child.pid, system)) clearState(root);
     throw new Error(`${error.message} Log: ${paths.log}. If it is still running, use npm run harness:quit.`);
   }
   const restrictedMode = await system.enableCommunityPlugins({ port, target: page.target });
