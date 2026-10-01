@@ -36,7 +36,7 @@ prepare/update/preflight は filesystem の成功であり、Obsidian UI の成�
   - 出力 JSON（pid、version、port など）は起動の成功であり UI PASS ではない。
 - `npm run harness:quit`: 記録 PID だけを対象に、`ps -ww -o command= -p <pid>` の command line が専用 `--user-data-dir=<profile>` を厳密に含むことを確認してから SIGTERM し、終了を待って報告し state を消す。記録が無い/既に終了済みなら何もせず報告する。PID が別プロセスに再利用されていれば signal せず state だけ消す。SIGTERM 後も終了しなければ state を残して失敗する（SIGKILL・名前指定はしない）。
 
-test-vault を利用者の通常 Obsidian で開かない（利用者 profile は検査しないため、その場合の書き込みは harness が検出できない）。残存リスク: 同じ bundle ID のため Dock に2つ表示され、`obsidian://` URL がどちらに届くかは macOS 次第。
+test-vault を利用者の通常 Obsidian で開かない（利用者 profile は検査しないため、その場合の書き込みは harness が検出できない）。残存リスク: 同じ bundle ID のため Dock に2つ表示され、`obsidian://` URL がどちらに届くかは macOS 次第。`HOME` を使わない bundle 単位の macOS 状態（`md.obsidian` の NSUserDefaults、Saved Application State、`~/Library/Logs` など）は利用者の Obsidian と共有され得る。CDP port は起動前に空きを確認するが、page と起動 PID の対応までは証明しない（test-vault を開く page であることは確認する）。trust dialog と Escape の挙動は Obsidian 1.14.3 の app code を読んだ結果で、実機証跡で確認するまでは未検証。`harness:quit` は main PID 終了後、同じ profile を持つ helper が消えるまで（signal せず）待つ。`harness:launch` は `.tooling/obsidian-launch.lock` で同時実行を拒否する（異常終了で残った場合は削除して再実行）。
 
 ## Obsidian desktop smoke
 

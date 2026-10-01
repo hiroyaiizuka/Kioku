@@ -17,8 +17,9 @@ async function waitFor(client, expression, wanted) {
 function cdpEndpoint() {
   const endpoint = new URL(process.env.KIOKU_CDP_URL ?? `http://127.0.0.1:${resolvePort()}`);
   if (endpoint.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(endpoint.hostname)
-      || endpoint.username || endpoint.password || endpoint.pathname !== '/' || endpoint.search || endpoint.hash) {
-    throw new Error('CDP must be a loopback HTTP endpoint with no credentials / path / query.');
+      || endpoint.username || endpoint.password || endpoint.pathname !== '/' || endpoint.search || endpoint.hash
+      || !endpoint.port) {
+    throw new Error('CDP must be a loopback HTTP endpoint with an explicit port and no credentials / path / query.');
   }
   return endpoint;
 }
@@ -27,7 +28,8 @@ async function captureBeforeStartup() {
   const root = projectRoot(); const expected = preflight(root); const endpoint = cdpEndpoint();
   // Automatic: the recorded dedicated instance must not be alive and no CDP port may answer, otherwise the new
   // baseline would be too late for onload. The user's own Obsidian is neither inspected nor required to close.
-  const stopped = await assertDedicatedStopped(root, [Number(endpoint.port || 80), resolvePort()]);
+  const stopped = await assertDedicatedStopped(root, [Number(endpoint.port), resolvePort()],
+    undefined, endpoint.hostname.replace(/^\[|\]$/gu, ''));
   const baseline = captureNoteBaseline(root, expected, stopped);
   console.info(JSON.stringify({ status: 'CAPTURED', kind: 'filesystem-baseline-not-ui-test', dedicatedInstance: stopped, baseline,
     next: `npm run harness:launch, then KIOKU_BASELINE_ID=${baseline.id} npm run harness:e2e:smoke. `

@@ -142,6 +142,29 @@ describe('dedicated Obsidian process control (fake process table)', () => {
     expect(await quitDedicated(root, system)).toMatchObject({ status: 'STOPPED', pid: 4242 });
     expect(system.signals).toEqual([[4242, 'SIGTERM']]); expect(existsSync(paths.state)).toBe(false);
   });
+  it('quit waits (without signalling) for helper processes that still use the profile', async () => {
+    const { root, paths } = setup();
+    const system = fakeSystem({ alive: [4242], commands: { 4242: `/A/Obsidian --user-data-dir=${paths.profile}` } });
+    let polls = 0; const ps = system.ps;
+    system.ps = (args) => (args.includes('-A') && (polls += 1) < 3
+      ? { status: 0, stdout: `  91 /A/Obsidian Helper (GPU) --user-data-dir=${paths.profile}\n` } : ps(args));
+    writeState(root, { pid: 4242, profile: paths.profile, port: 9222, startedAt: '2026-10-02T00:00:00.000Z' });
+    expect(await quitDedicated(root, system)).toMatchObject({ status: 'STOPPED' });
+    expect(polls).toBe(3); expect(system.signals).toEqual([[4242, 'SIGTERM']]);
+    const stuck = setup(); const always = fakeSystem({ alive: [4242], commands: { 4242: `/A/Obsidian --user-data-dir=${stuck.paths.profile}` },
+      list: `  91 /A/Obsidian Helper --user-data-dir=${stuck.paths.profile}\n` });
+    writeState(stuck.root, { pid: 4242, profile: stuck.paths.profile, port: 9222, startedAt: '2026-10-02T00:00:00.000Z' });
+    await expect(quitDedicated(stuck.root, always, 0)).rejects.toThrow(/helpers still use the dedicated profile \(pid 91\)/);
+    expect(always.signals).toEqual([[4242, 'SIGTERM']]);
+  });
+  it('treats an unexpected ps failure as unverifiable instead of guessing', async () => {
+    const { root, paths } = setup();
+    const system = fakeSystem({ alive: [4242] }); system.ps = () => ({ status: 2, stdout: '' });
+    writeState(root, { pid: 4242, profile: paths.profile, port: 9222, startedAt: '2026-10-02T00:00:00.000Z' });
+    await expect(quitDedicated(root, system)).rejects.toThrow(/ps failed \(2\)/);
+    await expect(assertDedicatedStopped(root, [9222], system)).rejects.toThrow(/ps failed/);
+    expect(system.signals).toEqual([]); expect(readState(root).pid).toBe(4242);
+  });
   it('quit keeps the record and fails when the process ignores SIGTERM', async () => {
     const { root, paths } = setup();
     const system = fakeSystem({ commands: { 4242: `/A/Obsidian --user-data-dir=${paths.profile}` } });
@@ -177,6 +200,18 @@ describe('dedicated Obsidian process control (fake process table)', () => {
     expect(readState(root)).toMatchObject({ pid: 4242, profile: paths.profile, port: 9333, startedAt: '2026-10-02T00:00:00.000Z' });
     expect(existsSync(paths.log)).toBe(true);
   });
+  it('launch refuses while another launch holds the lock, and keeps the record when the page wait fails but the process lives', async () => {
+    const { root, paths, source } = setup(); writeFileSync(join(source, 'obsidian-1.14.3.asar'), 'asar');
+    mkdirSync(paths.tooling); writeFileSync(paths.lock, '');
+    const locked = fakeSystem({ source });
+    await expect(launchDedicated(root, {}, locked)).rejects.toThrow(/Another harness:launch/);
+    expect(locked.spawned).toEqual([]); expect(existsSync(paths.lock)).toBe(true);
+    const other = setup(); writeFileSync(join(other.source, 'obsidian-1.14.3.asar'), 'asar');
+    const system = fakeSystem({ source: other.source });
+    system.waitForDedicatedPage = async () => { throw new Error('Timed out.'); };
+    await expect(launchDedicated(other.root, {}, system)).rejects.toThrow(/Timed out.*harness:quit/);
+    expect(readState(other.root).pid).toBe(4242); expect(existsSync(other.paths.lock)).toBe(false);
+  });
   it('launch keeps no record when the new process exits before its page appears', async () => {
     const { root, paths, source } = setup(); writeFileSync(join(source, 'obsidian-1.14.3.asar'), 'asar');
     const system = fakeSystem({ source });
@@ -198,6 +233,8 @@ describe('baseline precondition is about the dedicated instance only', () => {
     await expect(assertDedicatedStopped(root, [9222], fakeSystem({ busyPorts: [9444] }))).rejects.toThrow(/9444 already answers/);
     await expect(assertDedicatedStopped(root, [9222], fakeSystem({ busyPorts: [9222] }))).rejects.toThrow(/9222 already answers/);
     expect(await assertDedicatedStopped(root, [9222], fakeSystem())).toMatchObject({ staleRecord: 'recorded PID has exited' });
+    const stray = fakeSystem({ list: `  91 /A/Obsidian Helper --user-data-dir=${paths.profile}\n` });
+    await expect(assertDedicatedStopped(root, [9222], stray)).rejects.toThrow(/pid 91/);
   });
   it('detects a real listening loopback port', async () => {
     const server = createServer(); await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -224,5 +261,8 @@ describe('configuration and restricted-mode decisions', () => {
     expect(() => restrictedModeAction({ enabled: false, choice: null, trustModals: 0, modals: 0 }, true)).toThrow(/refusing to guess/);
     expect(() => restrictedModeAction({ enabled: false, choice: null, trustModals: 1, modals: 2 }, false)).toThrow(/Unexpected modal/);
     expect(() => restrictedModeAction({ enabled: false, choice: null, trustModals: 0, modals: 1 }, false)).toThrow(/Unexpected modal/);
+    expect(restrictedModeAction({ enabled: true, choice: 'true', trustModals: 1, modals: 1 }, false)).toBe('close-trust');
+    expect(() => restrictedModeAction({ enabled: true, choice: 'true', trustModals: 1, modals: 2 }, false)).toThrow(/Unexpected modal/);
+    expect(() => restrictedModeAction({ enabled: true, choice: 'true', trustModals: 0, modals: 1 }, false)).toThrow(/Unexpected modal/);
   });
 });

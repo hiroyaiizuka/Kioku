@@ -66,7 +66,11 @@ const restrictedStateExpression = `JSON.stringify({
  */
 export function restrictedModeAction(state, waitedLongEnough) {
   if (!state) return 'wait';
-  if (state.enabled) return state.trustModals ? 'close-trust' : 'none';
+  if (state.enabled) {
+    if (!state.modals) return 'none';
+    if (state.trustModals === 1 && state.modals === 1) return 'close-trust';
+    throw new Error('Unexpected modal while resolving restricted mode; refusing to click through it.');
+  }
   if (state.modals > 0) {
     if (state.trustModals === 1 && state.modals === 1) return 'enable-and-close-trust';
     throw new Error('Unexpected modal while resolving restricted mode; refusing to click through it.');
@@ -106,7 +110,8 @@ export async function enableCommunityPlugins({ target, timeoutMs = 10000 }) {
       throw new Error(`Community plugins not in the expected state (loaded: ${verified?.loaded}, configured: ${verified?.configured}).`);
     }
     assertNoForeignModal(verified.modals);
-    return action === 'none' ? 'already-off (choice stored in this dedicated profile)'
-      : 'turned-off-by-harness via app.plugins.setEnable(true) (dedicated profile only)';
+    if (action === 'none') return 'already-off (choice stored in this dedicated profile)';
+    if (action === 'close-trust') return 'already-off; stray trust dialog closed with Escape';
+    return 'turned-off-by-harness via app.plugins.setEnable(true) (dedicated profile only)';
   } finally { client.close(); }
 }

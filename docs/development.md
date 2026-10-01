@@ -26,6 +26,6 @@ npm run harness:quit       # 記録 PID だけを検証して SIGTERM。restart 
 npm run hooks:install      # Git 作成後の任意 hook。check を skip しない
 ```
 
-生成物は `dist/kioku/`、試用 Vault は `test-vault/`、実行証跡は `artifacts/`、専用 Obsidian の profile/HOME/state/log は `.tooling/`。すべて git 管理外。環境変数: `KIOKU_CDP_PORT`（既定 9222）、`KIOKU_OBSIDIAN_BINARY`（正規化済み絶対 path の既存実行ファイル、既定 `/Applications/Obsidian.app/Contents/MacOS/Obsidian`）、`KIOKU_CDP_URL`（smoke 用 loopback URL、既定 port は `KIOKU_CDP_PORT`）。`npm run check` は実機を起動せず、実機成功を主張しない。プライマリーは `main` に置き、チケットごとに独立した Git worktree で作業する。main への直接 push は行わず、変更は PR でレビューする。
+生成物は `dist/kioku/`、試用 Vault は `test-vault/`、実行証跡は `artifacts/`、専用 Obsidian の profile/HOME/state/log は `.tooling/`。すべて git 管理外。環境変数: `KIOKU_CDP_PORT`（既定 9222）、`KIOKU_OBSIDIAN_BINARY`（正規化済み絶対 path の既存実行ファイル、既定 `/Applications/Obsidian.app/Contents/MacOS/Obsidian`）、`KIOKU_CDP_URL`（smoke 用 loopback URL、port 明示必須、既定は `http://127.0.0.1:<KIOKU_CDP_PORT>`）。`npm run check` は実機を起動せず、実機成功を主張しない。プライマリーは `main` に置き、チケットごとに独立した Git worktree で作業する。main への直接 push は行わず、変更は PR でレビューする。
 
 dependency 更新では Node/Obsidian の互換、公式 lint peer、lock、audit を確認する。Obsidian API 型は `manifest.minAppVersion` と同じ。Node security advisory が tooling の local-only test server/型 package にだけある場合も、残る理由と到達可能性をレビューへ記録する。

@@ -12,6 +12,6 @@ production esbuild は browser/CJS/ES2021、external は `obsidian` だけ。bui
 
 ## Tooling trust boundary
 
-Node は `scripts/` とテストだけ。全 CLI は引数で任意 path を受けず、real project root からの実行を要求する。書き込み先の全 existing path component について project containment、symlink、file hard link、型を確認し、一時ファイルから atomic rename する。これは誤操作/既存 link に対する防御で、同一ユーザーの敵対的 concurrent filesystem mutation まで完全に防ぐものではない。Vault 更新中は専用インスタンスを `harness:quit` で止める。プロジェクト外へ触れるのは、利用者の app-support にある `obsidian-*.asar` の読み取りと、専用 `--user-data-dir` を command line に持つことを `ps` で確認した記録 PID への SIGTERM だけで、プロセスを名前で探したり終了したりしない。
+Node は `scripts/` とテストだけ。全 CLI は引数で任意 path を受けず、real project root からの実行を要求する。書き込み先の全 existing path component について project containment、symlink、file hard link、型を確認し、一時ファイルから atomic rename する。これは誤操作/既存 link に対する防御で、同一ユーザーの敵対的 concurrent filesystem mutation まで完全に防ぐものではない。Vault 更新中は専用インスタンスを `harness:quit` で止める。プロジェクト外へ触れるのは、利用者の app-support にある `obsidian-*.asar` の読み取り、Obsidian 実行ファイルの専用 profile での起動、専用 `--user-data-dir` を command line に持つことを `ps` で確認した記録 PID への SIGTERM だけで、プロセスを名前で探したり終了したりしない。
 
 `harness:prepare` は Vault が少しでも存在すれば拒否する。生成 marker が完全一致する Vault のみ update/preflight できる。update は4配布物だけを atomic update し、Markdown と `.obsidian/community-plugins.json` を含む既存 config を変更しない。preflight は enablement が厳密に `["kioku"]` であることも確認する。

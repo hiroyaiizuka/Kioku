@@ -24,6 +24,7 @@ export function instancePaths(root) {
     // startup and unlinks it on quit; a private HOME keeps the user's instance socket untouched.
     home: join(tooling, 'obsidian-home'),
     state: join(tooling, 'obsidian-instance.json'),
+    lock: join(tooling, 'obsidian-launch.lock'),
     log: join(tooling, 'obsidian-instance.log'),
   };
 }
@@ -233,7 +234,7 @@ export function recordedInstance(root, system = defaultSystem) {
  * Baseline precondition: the dedicated instance is not running and no CDP port answers.
  * It does not (and must not) inspect or require closing the user's own Obsidian.
  */
-export async function assertDedicatedStopped(root, ports, system = defaultSystem) {
+export async function assertDedicatedStopped(root, ports, system = defaultSystem, host = '127.0.0.1') {
   const paths = instancePaths(root);
   const recorded = recordedInstance(root, system);
   if (recorded.running) {
@@ -243,7 +244,7 @@ export async function assertDedicatedStopped(root, ports, system = defaultSystem
   if (strays.length) throw new Error(`Processes still use the dedicated profile (pid ${strays.join(', ')}); run npm run harness:quit.`);
   const checked = [...new Set([...ports, ...(recorded.state ? [recorded.state.port] : [])])];
   for (const port of checked) {
-    if (await system.portInUse(port)) {
+    if (await system.portInUse(port) || (!['127.0.0.1', 'localhost'].includes(host) && await system.portInUse(port, host))) {
       throw new Error(`CDP port ${port} already answers; the dedicated instance (or something else) is up. Baseline must precede startup.`);
     }
   }
@@ -263,9 +264,24 @@ function childEnvironment(home) {
  */
 export async function launchDedicated(root, env = process.env, system = defaultSystem) {
   assertSupported(system.platform);
+  const paths = instancePaths(root);
+  ensureDirectory(root, paths.tooling);
+  safePath(root, paths.lock, 'file', true);
+  // Exclusive launch lock: overlapping launches must not overwrite / clear each other's record.
+  try { closeSync(openSync(paths.lock, 'wx', 0o600)); }
+  catch (error) {
+    if (error.code === 'EEXIST') {
+      throw new Error(`Another harness:launch holds ${paths.lock}. If none is running, delete that file and retry.`);
+    }
+    throw error;
+  }
+  try { return await launchLocked(root, env, system, paths); }
+  finally { if (safePath(root, paths.lock, 'file', true)) unlinkSync(paths.lock); }
+}
+
+async function launchLocked(root, env, system, paths) {
   const expected = preflight(root);
   const { minAppVersion } = readJSON(root, 'manifest.json');
-  const paths = instancePaths(root);
   const port = resolvePort(env);
   const executable = system.executable ?? resolveExecutable(env);
   const recorded = recordedInstance(root, system);
@@ -298,7 +314,7 @@ export async function launchDedicated(root, env = process.env, system = defaultS
     page = await system.waitForDedicatedPage({ port, vault: expected.vault, version: profile.version,
       alive: () => isAlive(child.pid, system) });
   } catch (error) {
-    if (!isAlive(child.pid, system)) clearState(root);
+    if (!isAlive(child.pid, system) && readState(root)?.pid === child.pid) clearState(root);
     throw new Error(`${error.message} Log: ${paths.log}. If it is still running, use npm run harness:quit.`);
   }
   const restrictedMode = await system.enableCommunityPlugins({ port, target: page.target });
@@ -309,6 +325,7 @@ export async function launchDedicated(root, env = process.env, system = defaultS
 
 /** Terminate only the recorded PID, after proving its command line carries the dedicated profile flag. */
 export async function quitDedicated(root, system = defaultSystem, timeoutMs = 20000) {
+  const paths = instancePaths(root);
   const recorded = recordedInstance(root, system);
   if (!recorded.state) return { status: 'NOT_RUNNING', message: 'No recorded dedicated instance; nothing was signalled.' };
   if (!recorded.running) {
@@ -321,6 +338,17 @@ export async function quitDedicated(root, system = defaultSystem, timeoutMs = 20
   while (isAlive(pid, system)) {
     if (Date.now() > end) throw new Error(`Dedicated Obsidian (pid ${pid}) did not exit within ${timeoutMs} ms after SIGTERM; state kept.`);
     await system.sleep(100);
+  }
+  // Electron helpers (GPU/renderer) can outlive the main PID briefly; wait (never signal them) so that an
+  // immediate harness:launch / baseline does not see them as strays.
+  let helpers = profileProcesses(paths.profile, system);
+  while (helpers.length) {
+    if (Date.now() > end) {
+      clearState(root);
+      throw new Error(`Main pid ${pid} exited, but helpers still use the dedicated profile (pid ${helpers.join(', ')}); retry later.`);
+    }
+    await system.sleep(100);
+    helpers = profileProcesses(paths.profile, system);
   }
   clearState(root);
   return { status: 'STOPPED', pid, port: recorded.state.port, message: 'SIGTERM sent to the recorded dedicated PID only; it exited.' };
