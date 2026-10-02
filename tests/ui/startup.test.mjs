@@ -39,17 +39,25 @@ beforeEach(async () => {
 });
 afterEach(() => { dom.window.close(); delete globalThis.document; delete globalThis.window; });
 
+const status = (plugin) => plugin.commands.find((command) => command.id === 'open-startup');
+
 describe('actual plugin source: startup and status popup', () => {
-  it('registers one ribbon, the status and extract commands and a file-menu entry without note I/O', () => {
+  it('registers one ribbon, the review / status / extract commands, a file-menu entry and settings without any I/O', () => {
     const app = deniedApp(); const plugin = new Plugin(app); plugin.onload();
     expect(plugin.ribbons).toHaveLength(1); expect(plugin.ribbons[0].getAttribute('aria-label')).toBe('フラッシュカード');
-    expect(plugin.commands.map((command) => command.id)).toEqual(['open-startup', 'extract-explicit-qa']);
+    expect(plugin.commands.map((command) => command.id)).toEqual(['open-review', 'open-startup', 'extract-explicit-qa']);
+    expect(plugin.commands.map((command) => command.name)).toEqual(['デッキを選んで復習', 'フラッシュカード（状態）',
+      '開いているノート・選択範囲から問い・答えの候補を抽出']);
     expect(plugin.events.map((event) => event.name)).toEqual(['file-menu']);
+    expect(plugin.settingTabs).toHaveLength(1);
     expect(fireRegisteredEvents(plugin)).toEqual(['Kioku：問い・答えの候補を抽出']);
-    plugin.ribbons[0].click(); plugin.commands[0].callback();
+    // Settings (data.json) are read on first use, not at startup.
+    expect(plugin.loadDataCalls).toBe(0);
+    status(plugin).callback(); status(plugin).callback();
     const modals = document.querySelectorAll('.kioku-startup-modal'); expect(modals).toHaveLength(1);
-    expect(modals[0].textContent).toContain('採用したものだけ元ノートへ保存');
-    expect(modals[0].textContent).toContain('デッキ・復習（間隔反復）・AI による候補作成は未実装');
+    expect(modals[0].textContent).toContain('デッキで、採用したカードを間隔反復の日程で復習できます');
+    expect(modals[0].textContent).toContain('実機確認はまだです');
+    expect(modals[0].textContent).toContain('AI による候補作成は未実装');
     expect(modals[0].textContent).toContain('この画面を開くだけではノートを読み書きしません');
     const identity = modals[0].querySelector('.kioku-build-identity');
     expect(identity.dataset).toMatchObject({ kiokuVersion: '0.0.1', kiokuBuildId: 'unit-build' });
@@ -57,8 +65,8 @@ describe('actual plugin source: startup and status popup', () => {
     plugin.onunload(); expect(app.ioCalls).toEqual([]);
   });
   it('closes an open status popup on unload and can open after close', () => {
-    const app = deniedApp(); const plugin = new Plugin(app); plugin.onload(); plugin.commands[0].callback();
-    document.querySelector('.kioku-startup-close').click(); plugin.commands[0].callback();
+    const app = deniedApp(); const plugin = new Plugin(app); plugin.onload(); status(plugin).callback();
+    document.querySelector('.kioku-startup-close').click(); status(plugin).callback();
     expect(document.querySelectorAll('.kioku-startup-modal')).toHaveLength(1);
     plugin.onunload(); expect(document.querySelector('.kioku-startup-modal')).toBeNull();
     expect(app.ioCalls).toEqual([]);
@@ -84,5 +92,18 @@ describe('actual plugin source: startup and status popup', () => {
     const Mutant = await compilePlugin(source, notices); const app = deniedApp(); const plugin = new Mutant(app);
     expect(() => plugin.onload()).toThrow(/forbids note I\/O/);
     expect(app.ioCalls.map((call) => call.method)).toEqual(['workspace.getActiveViewOfType']);
+  });
+  it('detects a startup mutant that loads review data during onload', async () => {
+    const source = readFileSync('src/main.ts', 'utf8').replace("ribbon.addClass('kioku-ribbon');",
+      "ribbon.addClass('kioku-ribbon'); void this.app.vault.adapter.exists('Kioku');");
+    const Mutant = await compilePlugin(source, notices); const app = deniedApp(); const plugin = new Mutant(app);
+    expect(() => plugin.onload()).toThrow(/forbids note I\/O/);
+    expect(app.ioCalls.map((call) => call.method)).toEqual(['vault.adapter.exists']);
+  });
+  it('detects a startup mutant that reads data.json during onload', async () => {
+    const source = readFileSync('src/main.ts', 'utf8').replace("ribbon.addClass('kioku-ribbon');",
+      "ribbon.addClass('kioku-ribbon'); void settings.get();");
+    const Mutant = await compilePlugin(source, notices); const plugin = new Mutant(deniedApp()); plugin.onload();
+    expect(plugin.loadDataCalls).toBe(1);
   });
 });
