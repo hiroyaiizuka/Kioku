@@ -106,6 +106,37 @@ describe('AI section of the candidate popup', () => {
     expect(weak.querySelector('.kioku-candidate-adopt')).not.toBeNull();
     expect(generated()[0].querySelector('.kioku-ai-badge').textContent).toBe('推奨');
     expect(document.body.textContent).not.toContain(KEY);
+    // Neither the generator nor the judge receives the note name or its path (Q7).
+    for (const call of network.calls) {
+      expect(call.body).not.toContain('生物');
+      expect(call.body).not.toContain('学習/');
+    }
+  });
+
+  it('sends once when the run button is clicked twice quickly', async () => {
+    const { plugin } = open({ ai: ai({ judge: 'none' }) });
+    network.respond = () => chat({ cards: [] });
+    await extract(plugin);
+    const run = section().querySelector('.kioku-ai-run');
+    run.click(); run.click();
+    await flush();
+    expect(network.calls).toHaveLength(1);
+  });
+
+  it('re-confirms before sending when the note changed after the preview (E2)', async () => {
+    const consent = 'jev|api.typesafe.ai|jev-latest';
+    const { plugin, editor } = open({ ai: ai({ providers: { local: { model: 'qwen3:8b' }, jev: { apiKey: KEY, consent } } }) });
+    network.respond = (request) => (request.url.includes('typesafe') ? jev(0.95) : chat({ cards: [] }));
+    await extract(plugin);
+    expect(section().querySelector('.kioku-ai-preview').textContent).toContain(`本文 ${NOTE.trimEnd().length} 字`);
+    editor.text = `${NOTE}追記した一文。\n`;
+    section().querySelector('.kioku-ai-run').click(); await flush();
+    expect(network.calls).toEqual([]);
+    expect(section().querySelector('.kioku-ai-status').textContent).toContain('ノートか設定が変わったため、送信内容を更新しました');
+    expect(section().querySelector('.kioku-ai-preview').textContent).toContain(`本文 ${(NOTE + '追記した一文。').length} 字`);
+    section().querySelector('.kioku-ai-run').click(); await flush();
+    expect(network.calls.map((call) => new URL(call.url).host)).toEqual(['localhost:11434']);
+    expect(network.calls[0].body).toContain('追記した一文。');
   });
 
   it('asks again before sending when consent is missing for an external generator', async () => {

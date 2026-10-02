@@ -82,6 +82,8 @@ type AiPhase =
   | { readonly kind: 'loading' }
   | { readonly kind: 'unavailable'; readonly reason: string }
   | { readonly kind: 'ready'; readonly prep: ReadyPreparation; readonly notice: string }
+  /** The run button was pressed: settings and the note are being re-read; nothing is sent yet. */
+  | { readonly kind: 'preparing'; readonly prep: ReadyPreparation }
   | { readonly kind: 'running'; readonly prep: ReadyPreparation; readonly startedAt: number; waiting: boolean; generated: boolean }
   | { readonly kind: 'finished'; readonly prep: ReadyPreparation; readonly message: string };
 
@@ -326,6 +328,7 @@ export class CandidateModal extends Modal {
     } else {
       const label = phase.prep.external ? '送信して作る' : 'AI で候補を作る';
       const run = actions.createEl('button', { text: label, cls: 'mod-cta kioku-ai-run' });
+      run.disabled = phase.kind === 'preparing';
       run.addEventListener('click', () => {
         void this.startRun();
       });
@@ -336,6 +339,7 @@ export class CandidateModal extends Modal {
   private statusText(): string {
     const phase = this.ai;
     if (phase.kind === 'ready') return phase.notice;
+    if (phase.kind === 'preparing') return '送信内容を確認しています…';
     if (phase.kind === 'finished') return [phase.message, this.runSummary].filter(Boolean).join(' ');
     if (phase.kind !== 'running') return '';
     if (phase.waiting) return AI_GUIDANCE.waiting;
@@ -434,6 +438,9 @@ export class CandidateModal extends Modal {
   private async startRun(): Promise<void> {
     const phase = this.ai;
     if (phase.kind !== 'ready' && phase.kind !== 'finished') return;
+    // Leave ready synchronously (before any await): a second click is ignored, never a second send.
+    this.ai = { kind: 'preparing', prep: phase.prep };
+    this.render();
     let prep: Preparation;
     try {
       const text = await this.options.ai.readNote();
@@ -496,6 +503,7 @@ export class CandidateModal extends Modal {
       },
       onJudged: (index, judgement, failure) => {
         if (!current()) return;
+        running.waiting = false;
         const entry = generatedEntries[index];
         if (entry?.generated) entry.generated.judgement = judgement;
         if (failure && !this.judgeFailure) this.judgeFailure = failure;

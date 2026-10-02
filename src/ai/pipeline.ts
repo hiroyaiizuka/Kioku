@@ -22,7 +22,8 @@ const JEV_TOKENS_PER_CANDIDATE = 2000;
 
 /**
  * Long-lived per plugin instance: the slots outlive a popup, so requests abandoned by a closed
- * popup or a cancel still count until they settle (§10).
+ * popup or a cancel still count until they settle (§10). `requestUrl` cannot be aborted, so a
+ * request that never settles holds its slot until the plugin is reloaded (a new runtime).
  */
 export class AiRuntime {
   private readonly gates = new Map<string, SlotGate>();
@@ -49,6 +50,7 @@ export type Preparation =
     readonly generatorGate: SlotGate;
     readonly generatorContext: FailureContext;
     readonly judge: DecisionProvider | null;
+    readonly judgeGate: SlotGate | null;
     /** Why candidates stay 未判定 when there is no judge (Q8). */
     readonly noJudgeWhy: string | null;
     /** True when any part of the run sends text off this computer: ask before sending (E2). */
@@ -76,13 +78,15 @@ export function prepareRun(runtime: AiRuntime, ai: AiSettings, note: string, ran
   const generatorContext: FailureContext = { label: generator.label, where: generator.external ? generator.endpointHost : local.baseUrl,
     external: generator.external };
   let judge: DecisionProvider | null = null;
+  let judgeGate: SlotGate | null = null;
   let noJudgeWhy: string | null = null;
   if (ai.judge === 'none') noJudgeWhy = '判定なし';
   else if (!ai.providers.jev.apiKey) noJudgeWhy = 'Jev 未設定';
   else if (!hasConsent('jev', ai)) noJudgeWhy = 'Jev への送信に未同意';
   else {
+    judgeGate = runtime.gate('jev', JUDGE_SLOTS);
     judge = createJevJudge({ apiKey: ai.providers.jev.apiKey, model: ai.providers.jev.model, http: runtime.http,
-      clock: runtime.clock, gate: runtime.gate('jev', JUDGE_SLOTS), timeoutMs: ai.timeouts.judgeSeconds * 1000 });
+      clock: runtime.clock, gate: judgeGate, timeoutMs: ai.timeouts.judgeSeconds * 1000 });
   }
   const perCandidate = JEV_USD_PER_TOKEN * JEV_TOKENS_PER_CANDIDATE;
   const preview = [
@@ -93,7 +97,7 @@ export function prepareRun(runtime: AiRuntime, ai: AiSettings, note: string, ran
       : `判定：なし（${noJudgeWhy ?? ''}）。候補は決定的な検査だけで「未判定」と表示します。`,
     'ノート名・ファイルパス・Vault 名は送りません。',
   ];
-  return { ok: true, note, source, generator, generatorGate, generatorContext, judge, noJudgeWhy, external: generator.external || judge !== null, preview };
+  return { ok: true, note, source, generator, generatorGate, generatorContext, judge, judgeGate, noJudgeWhy, external: generator.external || judge !== null, preview };
 }
 
 export type GenerationResult =
@@ -140,6 +144,8 @@ export async function runPipeline(prep: Preparation & { readonly ok: true }, con
     report.candidates.forEach((_candidate, index) => callbacks.onJudged(index, unjudged(prep.noJudgeWhy ?? '判定なし'), null));
     return;
   }
+  // Before this run sends any judge request, every slot is still held by earlier (abandoned) requests.
+  if (prep.judgeGate && prep.judgeGate.inFlight >= prep.judgeGate.capacity) callbacks.onWaiting();
   const judgeContext: FailureContext = { label: judge.label, where: judge.endpointHost, external: judge.external,
     authHint: 'キーは console.typesafe.ai/keys で発行できます。' };
   await Promise.all(report.candidates.map(async (candidate, index) => {

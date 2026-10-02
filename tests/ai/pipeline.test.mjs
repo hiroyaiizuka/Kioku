@@ -210,6 +210,33 @@ describe('runPipeline', () => {
   });
 });
 
+describe('judge slots held by abandoned requests', () => {
+  it('shows the waiting state before judging when all Jev slots are still held', async () => {
+    const clock = fakeClock();
+    const http = fakeHttp((request) => (request.url.startsWith(JEV_ENDPOINT) ? 'hang' : chat({ cards: Array.from({ length: 4 },
+      (_, index) => ({ fact: 'f', question: `問${index}`, answer: '葉緑体', quote: '葉緑体で行われる。' })) })));
+    const runtime = new AiRuntime(http, clock);
+    const ai = consented(settings(), 'jev');
+    const first = new AbortController();
+    const firstEvents = collect();
+    const abandoned = runPipeline(prepareRun(runtime, ai, NOTE), context, firstEvents.callbacks, first.signal);
+    await drain();
+    expect(http.hungCount()).toBe(4);
+    first.abort();
+    await abandoned;
+    expect(firstEvents.events.waiting).toBe(0);
+    const { events, callbacks } = collect();
+    const second = new AbortController();
+    const retry = runPipeline(prepareRun(runtime, ai, NOTE), context, callbacks, second.signal);
+    await drain();
+    expect(events.waiting).toBe(1);
+    expect(http.requests.filter((request) => request.url.startsWith(JEV_ENDPOINT))).toHaveLength(4);
+    second.abort();
+    await retry;
+    expect(events.judged.every((item) => item.label === '未判定（キャンセル）')).toBe(true);
+  });
+});
+
 describe('failure messages', () => {
   it('cover every failure kind without leaking a key', () => {
     const contexts = [{ label: 'Jev', where: 'api.typesafe.ai', external: true, authHint: 'キーは console.typesafe.ai/keys で発行できます。' },
