@@ -119,7 +119,8 @@ export class ReviewStore {
     const missing = base ? missingAppliedHistory(base, files) : null;
     if (missing) problems.push({ kind: 'read-only', message: historyMissing(`${folder}/${missing}`) });
     // With problems the replay is only used for display (counts); nothing is written in that mode.
-    const { state } = replayHistory(base, files);
+    // With missing history, state.json itself is the better picture of the schedules.
+    const state = missing && base ? base : replayHistory(base, files).state;
     // A truncated tail is repairable only when it is the only problem.
     const problem = problems.find((item) => item.kind === 'read-only') ?? problems[0] ?? null;
     return new ReviewStore(adapter, folder, state, problem, history);

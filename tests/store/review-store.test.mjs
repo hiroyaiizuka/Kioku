@@ -66,6 +66,8 @@ describe('history that state.json already reflects must not disappear silently',
       expect((await store.record(event('c', '1'))).ok).toBe(false);
       expect(adapter.writes()).toEqual([]);
       expect(adapter.files.get(S)).toBe(full);
+      // Counts keep showing state.json's schedules, not "everything is new".
+      expect(Object.keys(store.state.cards).sort()).toEqual(['kioku-a', 'kioku-b']);
     }
   });
   it('stops an append when the file became shorter than the applied position after loading', async () => {

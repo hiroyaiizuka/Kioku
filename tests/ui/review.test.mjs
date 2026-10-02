@@ -283,6 +283,9 @@ describe('keyboard safety', () => {
     expect(phase()).toBe('failed');
     fail = false;
     expect(document.querySelector('.kioku-review-back').disabled).toBe(true);
+    expect(document.querySelector('.kioku-review-open').disabled).toBe(true);
+    document.querySelector('.kioku-review-back').click();
+    expect(phase()).toBe('failed');
     expect(document.activeElement.classList.contains('kioku-review-retry')).toBe(true);
     key('Enter'); await settle();
     const lines = historyLines(adapter);

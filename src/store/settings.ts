@@ -60,7 +60,7 @@ export class SettingsStore {
     this.current ??= this.loadData().then((raw) => {
       const folder = (raw as { dataFolder?: unknown } | null)?.dataFolder;
       if (folder !== undefined && (typeof folder !== 'string' || !normalizeDataFolder(folder))) {
-        throw new Error(`設定の学習データのフォルダ（${JSON.stringify(folder)}）が使えません。設定で正しいフォルダを指定してください`);
+        throw new Error(`設定の学習データのフォルダ（${JSON.stringify(folder)}）が使えません。Obsidian を閉じて .obsidian/plugins/kioku/data.json の dataFolder を正しいフォルダ名に直してください`);
       }
       return parseSettings(raw);
     });
