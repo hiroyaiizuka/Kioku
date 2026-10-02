@@ -430,7 +430,7 @@ describe('obsidian-instance CLI', () => {
   it('quit resolves KIOKU_QUIT_TIMEOUT_MS from the environment and is a no-op without a record', () => {
     const { root } = setup();
     const run = (env) => spawnSync(process.execPath, ['scripts/obsidian-instance-cli.mjs', 'quit'],
-      { cwd: root, encoding: 'utf8', env: { ...process.env, ...env } });
+      { cwd: root, encoding: 'utf8', env: { ...process.env, KIOKU_HEAVY_QUEUE: '', ...env } });
     const invalid = run({ KIOKU_QUIT_TIMEOUT_MS: '5' });
     expect(invalid.status).toBe(1); expect(invalid.stderr).toMatch(/KIOKU_QUIT_TIMEOUT_MS must be/);
     const ok = run({ KIOKU_QUIT_TIMEOUT_MS: '120000' });

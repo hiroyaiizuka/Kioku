@@ -9,7 +9,7 @@
 | type | `npm run typecheck` | strict、unchecked index、override、unused |
 | test | `npm test` | 状態 modal の honesty/lifecycle・起動時 I/O（ノート・`Kioku/`・`data.json`）禁止の変異検査、M1 の parser/除外/ID/重複/採用照合、Editor・`Vault.process` 書き込み経路の mock 検査（実機ではない）、M2 の FSRS 間隔・Kioku 日（DST 含む）・デッキ所属・ID 重複・新規上限・保存の安全策（読めない/無い、`.bak`、schema、末尾修復、不完全行の退避、eventId 重複除去、再生位置）・キー入力の安全・開閉で書かないことの mock 検査（実機ではない）、ts-fsrs の `Date.prototype` 汚染の復元、fixture containment、prepare/update preservation、hash/enablement、ノート不変とデータフォルダ未作成の非UI検査 |
 | build/package | `npm run build && npm run package` | 共通 recipe の browser production bundle（ts-fsrs を bundle し MIT 表示を先頭に保持、external は `obsidian` だけ）、現入力から write:false で再生成した期待 bytes/imports と4配布物を比較。dist の自己申告 hash だけでは認定しない |
-| all | `npm run check` | 上記を順に実行。実機は起動しない |
+| all | `npm run check` | 上記（`check:steps`）を順に実行。実機は起動しない。`KIOKU_HEAVY_QUEUE=1` のときだけ Mac 全体の順番待ちの中で実行 |
 
 CI は `npm ci` と `npm run check` を実行し dist を検査用 artifact にするだけで、公開しない。`npm run hooks:install` は Git worktree 作成後だけ任意で使え、pre-commit が同じ check を必ず実行する。
 
@@ -56,6 +56,22 @@ prepare/update/preflight は filesystem の成功であり、Obsidian UI の成�
 利用者向けの手動操作の案内: 専用インスタンスの実行中に普段の Obsidian を開くときは、利用者自身が `open -n -a Obsidian` を実行する（ただし上記のとおり、その Obsidian の CLI socket は専用インスタンスの quit で消え得るので、CLI を使うなら quit 後に再起動する。harness とエージェントは実行しない。Dock のクリックは専用インスタンスを前面に出すだけのことがある）。どちらの window かは title の Vault 名で見分ける。CDP port は loopback だけだが、実行中は同じマシンの任意のローカルプロセスが Node 権限で JS を実行できるため、テストしないときは `harness:quit` で止める。
 
 test-vault を利用者の通常 Obsidian で開かない（利用者 profile は検査しないため、その場合の書き込みは harness が検出できない）。残存リスク: 同じ bundle ID のため Dock に2つ表示され、`obsidian://` URL がどちらに届くかは macOS 次第。bundle 単位の macOS 状態（`md.obsidian` の NSUserDefaults、Saved Application State、`~/Library/Logs` など）と `~/.obsidian-cli.sock` は利用者の Obsidian と共有される（上記）。CDP port は起動前に空きを確認するが、page と起動 PID の対応までは証明しない（test-vault を開く page であることは確認する）。trust dialog と Escape の挙動は Obsidian 1.14.3 の app code を読んだ結果で、実機証跡で確認するまでは未検証。`harness:quit` は main PID 終了後、同じ profile を持つ helper が消えるまで（signal せず）待つ。login keychain の "Obsidian Safe Storage"（SecretStorage が使う safeStorage）は利用者のインスタンスと共有される（読み取りだけの想定だが未検証）。launch が timeout したときは、keychain などのシステムダイアログでメインスレッドが止まっている可能性があるので画面を確認する。起動時に `setAsDefaultProtocolClient("obsidian")` が呼ばれるが、同じ bundle なので既定 handler は変わらない想定（未検証）。
+
+## Mac 全体の重いジョブ順番待ち（LEV-305 pilot、opt-in）
+
+`KIOKU_HEAVY_QUEUE=1` のときだけ有効。未設定（空、`0` も同じ）なら `npm run check` は `npm run check:steps`（従来と同じ手順）を実行するだけで、キューのディレクトリにも触れない（違いは npm が出す見出し行だけ）。`1` 以外の値は拒否する。
+
+- 本体は `scripts/heavy-queue/`（`node:*` だけを使う tooling。プラグインの runtime には含めない）。ほかの project も `node <path>/scripts/heavy-queue/cli.mjs run --project <名前> --job check|native -- <command>`、`... status`（読むだけ）で使える。
+- 置き場所: `ORCA_HEAVY_QUEUE_DIR`（正規化済み絶対 path）、既定は `~/Library/Caches/orca-heavy-queue/`（macOS 以外は `~/.cache/orca-heavy-queue/`）。mode 0700、本人 uid、group/other 書き込み不可でなければ拒否する。git 管理外で、使っていないときは消してよい。
+- **スロットは 1 つ**（check と native で共有）。Mappy の制約「Obsidian 実機は 2 プロジェクト合計で同時に 1 台」は native を 1 スロットに入れれば満たせる。それに加えて、Mappy LEV-251 では高負荷が原因で順序の競合が起き、テストが落ちた。別プロジェクトの check が E2E と同時に走ると、実機の結果そのものが信用できなくなる。スロットが 1 つならロックの取得順の規則が要らず、入れ子は下の再入だけになる。代償として、ある worktree が native を持つ間（launch から quit まで）は、ほかの worktree の check が待つ。
+- 包む範囲: `npm run check`（pre-commit、`harness:prepare`/`harness:update` の中の check を含む）は check の間だけ持つ。`harness:launch` は native を取ってから起動し、起動に成功したら所有者を**専用 Obsidian の PID** に引き渡す（launch の CLI が終わっても保持される）。`harness:quit` は先に quit を実行し（キューが壊れていても Obsidian は止める）、その PID が消えていれば解放する。quit が時間切れになり PID が生きていれば保持したまま。`harness:e2e:smoke` は、この worktree が生きた native を持つときだけ動き、所有者を記録 JSON の `heavyQueue` に残す（baseline は対象外）。
+- 記録: `owner.json`（project、worktree、pid、cmdline、ps の開始時刻、job、seq、enqueuedAt、startedAt、waitedMs、引き渡し後は launcher）、`tickets/<seq>-<uuid>.json`（待ち行列）、`history.jsonl`（acquired、released、handed-off、recovered-*、overdue、待ち時間と保持時間）。作成は一時ファイルの hard link（排他）か rename で行い、書きかけの記録は見えない。
+- FIFO: seq は短い enqueue ロック（排他作成、保持者の pid とコマンド行を記録）の中で割り当てる。`seq.json` が最大値を覚えているので、seq は enqueue の順に厳密に増え、再利用されない。待つ側は、所有者・自分の順番・待ち時間を表示する（所有者が替わったとき、またはその後 60 秒ごと）。
+- 回収の条件: 所有者（待ち行列の ticket、enqueue ロックも同じ）を消してよいのは、`ps -p <pid>` の結果、その PID が無いとき、またはコマンド行か開始時刻が記録と違う（PID の使い回し）ときだけ。所有者の回収は先頭の待ち手だけが行う。消す前に一意な名前へ rename し、中身が判定したものと同じことを確かめる。違えば元に戻す。どのプロセスにも signal を送らない（`kill`/`pkill`/`pgrep`、一覧の pattern 検索は使わない。待ち手自身に一致して待ちが終わらなかった Mappy の事故を防ぐ）。30 分を超えた所有者は報告するだけ（`REPORT:` と `overdue`）。時計が戻ったら、保持時間は unknown と表示し、時間を理由にした判定はしない。
+- 再入: `run` は子に `ORCA_HEAVY_QUEUE_TOKEN` を渡し、同じ token を持つ要求（commit → pre-commit → check など）は待たずに実行する。native を持つ worktree からの check は入れ子として実行する（自分の実機セッション中の commit で deadlock しない）。同じ worktree からのそれ以外の 2 つ目の要求（check の二重実行、待ち中の二重 enqueue、native の二重取得）は、待たずに理由を示して拒否する。
+- 拒否（何も実行しない）: 記録や `seq.json` が読めない・形が違う、tickets に想定外のファイルがある、ディレクトリが symlink・ファイル・他人の所有・共有書き込み可・書き込み不可、ps が判定できない。自動で消して直すことはしない。
+- 既知の限界: Obsidian 自身が再起動して PID が変わる（`app.relaunch()`）と、記録の PID が消えたとみなして native が回収される。その後に `harness:quit` を実行すると、記録外の profile プロセスが一覧で表示される（従来どおり）。
+- Rollback: 環境変数を外す。ディレクトリは消すだけでよい。
 
 ## Obsidian desktop smoke
 
