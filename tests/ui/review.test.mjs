@@ -235,6 +235,22 @@ describe('keyboard safety', () => {
     expect(phase()).toBe('question');
   });
 
+  it('ignores clicks on buttons of an earlier card', async () => {
+    const { adapter, plugin } = setup();
+    await startDeck(plugin);
+    key(' ');
+    const oldGood = document.activeElement;
+    const oldSkip = document.querySelector('.kioku-review-skip');
+    key('3'); await settle();
+    key(' ');
+    expect(phase()).toBe('answer');
+    expect(question()).toBe('心拍数は？');
+    oldGood.click(); oldSkip.click(); await settle();
+    expect(historyLines(adapter)).toHaveLength(1);
+    expect(phase()).toBe('answer');
+    expect(question()).toBe('心拍数は？');
+  });
+
   it('ignores ratings, skips and reveals while saving; disables the buttons', async () => {
     const { adapter, plugin } = setup();
     let release;
@@ -257,7 +273,8 @@ describe('keyboard safety', () => {
   it('retries a failed save with the same event (same eventId), never as a new rating', async () => {
     const { adapter, plugin } = setup();
     let fail = true;
-    adapter.hooks.write = (path) => { if (path === H && fail) throw new Error('EIO'); };
+    let attempted = null;
+    adapter.hooks.write = (path, data) => { if (path === H && fail) { attempted = JSON.parse(data); throw new Error('EIO'); } };
     await startDeck(plugin);
     key(' '); key('3'); await settle();
     expect(phase()).toBe('failed');
@@ -269,7 +286,7 @@ describe('keyboard safety', () => {
     key('Enter'); await settle();
     const lines = historyLines(adapter);
     expect(lines).toHaveLength(1);
-    expect(lines[0].grade).toBe(3);
+    expect(lines[0]).toEqual(attempted);
     expect(phase()).toBe('question');
   });
 

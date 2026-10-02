@@ -105,6 +105,17 @@ describe('recording a rating', () => {
     expect(adapter.files.get(H)).toBe(lines(A1, event('c', '1')));
   });
 
+  it('re-checks the tail before every append: a line truncated after loading stops the append', async () => {
+    const adapter = new FakeAdapter({ [H]: lines(A1) });
+    const store = await ReviewStore.load(adapter, 'Kioku');
+    const cut = serializeEvent(B1).slice(0, 30);
+    adapter.files.set(H, lines(A1) + cut);
+    expect(await store.record(event('c', '1'))).toEqual({ ok: false, reason: expect.stringContaining('途中で切れています') });
+    expect(adapter.files.get(H)).toBe(lines(A1) + cut);
+    expect(store.problem).toMatchObject({ kind: 'truncated', line: 2 });
+    expect(adapter.writes()).toEqual([]);
+  });
+
   it('does not remove the line when writing .broken cannot be confirmed', async () => {
     const cut = serializeEvent(B1).slice(0, 50);
     const adapter = new FakeAdapter({ [H]: lines(A1) + cut });
@@ -136,7 +147,6 @@ describe('recording a rating', () => {
     expect(await store.record(B1)).toEqual({ ok: true, stateSaved: true });
     expect(adapter.files.get(H)).toBe(lines(A1, B1));
     // An append that silently does not land is not "saved".
-    adapter.hooks.append = () => {};
     const quiet = new FakeAdapter({ [H]: lines(A1) });
     quiet.append = async () => {};
     const quietStore = await ReviewStore.load(quiet, 'Kioku');

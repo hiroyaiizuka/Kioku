@@ -12,7 +12,8 @@ describe('new-card limit and 今日だけ追加', () => {
     expect(newAllowance({ day: TODAY, newIntroduced: 20, extraNew: 10 }, TODAY, 20)).toBe(10);
     expect(newAllowance({ day: TODAY, newIntroduced: 35, extraNew: 10 }, TODAY, 20)).toBe(0);
     // Yesterday's counter and its extraNew no longer apply.
-    expect(newAllowance({ day: '2026-10-01', newIntroduced: 20, extraNew: 20 }, TODAY, 20)).toBe(20);
+    expect(newAllowance({ day: '2026-10-01', newIntroduced: 5, extraNew: 0 }, TODAY, 20)).toBe(20);
+    expect(newAllowance({ day: '2026-10-01', newIntroduced: 0, extraNew: 20 }, TODAY, 20)).toBe(20);
     expect(newAllowance({ day: TODAY, newIntroduced: 500, extraNew: 0 }, TODAY, null)).toBe(Number.POSITIVE_INFINITY);
     expect(newAllowance(null, TODAY, 0)).toBe(0);
   });
@@ -25,6 +26,7 @@ describe('session queue', () => {
 
   it('presents due cards oldest first, then new cards in note order, each ID once', () => {
     const queue = new ReviewQueue(cards, lookup, TODAY);
+    expect(queue.remaining(10)).toBe(5);
     const seen = [];
     for (let card = queue.next(10); card; card = queue.next(10)) { seen.push(card.id); queue.markRated(card.id); }
     expect(seen).toEqual(['c', 'b', 'a', 'e', 'f']);
