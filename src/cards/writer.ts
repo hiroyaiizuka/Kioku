@@ -1,6 +1,7 @@
 import { MarkdownView, TFile, type App } from 'obsidian';
-import { planAdoption, type RecordedCandidate } from './adoption';
+import { planAdoption, type AdoptionPlan, type RecordedCandidate } from './adoption';
 import { errorMessage } from './error-message';
+import { planInsertion, type RecordedAnchor } from './insertion';
 import { extractCandidates, type CardText } from './parser';
 import { REASONS, canvasEmbeds, canvasUnreadable, writeFailed } from './reasons';
 
@@ -37,20 +38,36 @@ const UNCONFIRMED = REASONS.unconfirmedWrite;
  * immediately before the write; on mismatch nothing is written. Success is reported only
  * after the written content is confirmed.
  */
-export async function adoptCandidate(app: App, file: TFile, recorded: RecordedCandidate,
+export function adoptCandidate(app: App, file: TFile, recorded: RecordedCandidate,
   edited: CardText): Promise<AdoptResult> {
+  return applyPlan(app, file, (text) => planAdoption(text, recorded, edited));
+}
+
+/**
+ * Adopts a generated card: inserts it after the block its quote came from (docs/m3-design.md §9),
+ * through exactly the same guarded write path as `adoptCandidate`.
+ */
+export function adoptGenerated(app: App, file: TFile, recorded: RecordedAnchor, edited: CardText): Promise<AdoptResult> {
+  return applyPlan(app, file, (text) => planInsertion(text, recorded, edited));
+}
+
+/**
+ * The shared write: Canvas guard, then the plan on the editing view's buffer (one transaction =
+ * one Undo step) or inside `Vault.process`. `plan` re-verifies the original on the current text.
+ */
+async function applyPlan(app: App, file: TFile, plan: (text: string) => AdoptionPlan): Promise<AdoptResult> {
   const embedded = await openCanvasEmbedding(app, file);
   if (embedded) return { ok: false, reason: embedded };
   const view = findEditingView(app, file);
   if (view) {
     const editor = view.editor;
-    const plan = planAdoption(editor.getValue(), recorded, edited);
-    if (!plan.ok) return plan;
-    const at = editor.offsetToPos(plan.offset);
+    const planned = plan(editor.getValue());
+    if (!planned.ok) return planned;
+    const at = editor.offsetToPos(planned.offset);
     // One transaction = one Undo step; other views of the same note are synced by Obsidian.
-    editor.transaction({ changes: [{ from: at, to: at, text: plan.insert }] });
-    if (view.getMode() !== 'source' || editor.getValue() !== plan.next) return { ok: false, reason: UNCONFIRMED };
-    return { ok: true, cardId: plan.cardId, offset: plan.offset, inserted: plan.insert.length, via: 'editor' };
+    editor.transaction({ changes: [{ from: at, to: at, text: planned.insert }] });
+    if (view.getMode() !== 'source' || editor.getValue() !== planned.next) return { ok: false, reason: UNCONFIRMED };
+    return { ok: true, cardId: planned.cardId, offset: planned.offset, inserted: planned.insert.length, via: 'editor' };
   }
   // Closed, or open only in Reading view: write the file; Obsidian re-renders open views on modify.
   let result: AdoptResult = { ok: false, reason: UNCONFIRMED };
@@ -58,14 +75,14 @@ export async function adoptCandidate(app: App, file: TFile, recorded: RecordedCa
   let written: string;
   try {
     written = await app.vault.process(file, (data) => {
-      const plan = planAdoption(data, recorded, edited);
-      if (!plan.ok) {
-        result = plan;
+      const planned = plan(data);
+      if (!planned.ok) {
+        result = planned;
         return data;
       }
-      expected = plan.next;
-      result = { ok: true, cardId: plan.cardId, offset: plan.offset, inserted: plan.insert.length, via: 'vault' };
-      return plan.next;
+      expected = planned.next;
+      result = { ok: true, cardId: planned.cardId, offset: planned.offset, inserted: planned.insert.length, via: 'vault' };
+      return planned.next;
     });
   } catch (error) {
     return { ok: false, reason: writeFailed(errorMessage(error)) };
@@ -197,8 +214,8 @@ async function waitUntilQuiet(app: App, file: TFile, signal: AbortSignal, timing
  * The single recovery attempt after a confirmed loss: another view (typically a hover popover
  * that was closed with unsaved edits) saved a stale buffer over our write. Once that save has
  * happened the other view's buffer is clean, and a clean view reloads later external changes
- * instead of saving over them, so one retry converges. The retry goes through `adoptCandidate`
- * again, i.e. the Canvas guard, the editing-view choice and the original-text verification on
+ * instead of saving over them, so one retry converges. The retry (`again`: `adoptCandidate` or
+ * `adoptGenerated` with the same arguments) goes through the same write path, i.e. the Canvas guard, the editing-view choice and the original-text verification on
  * the current content: it never writes when the original changed and never inserts twice.
  * Returns `null` when the file does not become quiet (honest failure), when the first write is
  * still only in an editing view's buffer (it did not persist; writing again would not help), or
@@ -206,11 +223,11 @@ async function waitUntilQuiet(app: App, file: TFile, signal: AbortSignal, timing
  * so the caller confirms it again instead of inserting a second ID.
  */
 export async function recoverAdoption(app: App, file: TFile, previous: AdoptResult & { readonly ok: true },
-  recorded: RecordedCandidate, edited: CardText, signal: AbortSignal,
+  again: () => Promise<AdoptResult>, signal: AbortSignal,
   timing: QuietTiming = QUIET_TIMING): Promise<AdoptResult | null> {
   if (!(await waitUntilQuiet(app, file, signal, timing)) || signal.aborted) return null;
   if (await idOnDisk(app, file, previous.cardId)) return previous;
   const view = findEditingView(app, file);
   if (view && extractCandidates(view.editor.getValue()).some((candidate) => candidate.cardId === previous.cardId)) return null;
-  return adoptCandidate(app, file, recorded, edited);
+  return again();
 }
