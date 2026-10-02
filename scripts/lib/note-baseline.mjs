@@ -33,7 +33,7 @@ export function captureNoteBaseline(root, expected, vaultClosed) {
   if (vaultClosed !== true) throw new Error('Confirm Obsidian is closed before capturing the startup baseline.');
   const baseline = { schema: 1, id: randomUUID(), capturedAt: new Date().toISOString(), stage: 'before-startup',
     vaultClosed: 'operator-confirmed-before-launch', vault: expected.vault, buildId: expected.buildId, version: expected.version,
-    files: snapshotNotes(root) };
+    files: snapshotNotes(root), dataFolder: reviewDataFolder(root) };
   const directory = join(root, 'artifacts', 'e2e-smoke', 'baselines'); ensureDirectory(root, directory);
   const file = baselinePath(root, baseline.id); safePath(root, file, 'file', true);
   writeFileSync(file, `${JSON.stringify(baseline, null, 2)}\n`, { flag: 'wx', mode: 0o400 });
@@ -47,10 +47,48 @@ export function loadNoteBaseline(root, expected, id) {
       || !Number.isFinite(Date.parse(baseline.capturedAt)) || baseline.vault !== expected.vault
       || baseline.buildId !== expected.buildId || baseline.version !== expected.version
       || !baseline.files || Array.isArray(baseline.files) || typeof baseline.files !== 'object'
-      || Object.values(baseline.files).some((hash) => typeof hash !== 'string' || !/^[0-9a-f]{64}$/u.test(hash))) {
+      || Object.values(baseline.files).some((hash) => typeof hash !== 'string' || !/^[0-9a-f]{64}$/u.test(hash))
+      || (baseline.dataFolder !== undefined && (typeof baseline.dataFolder?.folder !== 'string'
+        || typeof baseline.dataFolder.existed !== 'boolean'))) {
     throw new Error('Invalid or stale pre-startup note baseline. Do not rebaseline after startup or before restart.');
   }
   return baseline;
+}
+
+/** Same rules as the plugin's normalizeDataFolder (src/store/settings.ts); null when unusable. */
+export function normalizeDataFolder(input) {
+  const segments = input.trim().replace(/\\/g, '/').split('/').map((segment) => segment.trim()).filter(Boolean);
+  if (!segments.length || segments.some((segment) => segment === '.' || segment === '..' || /[*"<>:|?]/.test(segment))) return null;
+  return segments[0].startsWith('.') ? null : segments.join('/');
+}
+
+/** The review data folder (`dataFolder` from the plugin's data.json, default `Kioku`) and whether it exists. */
+export function reviewDataFolder(root) {
+  const paths = harnessPaths(root); assertGeneratedVault(paths);
+  const settingsFile = join(paths.installed, 'data.json');
+  let folder = 'Kioku';
+  if (safePath(root, settingsFile, 'file', true)) {
+    const configured = JSON.parse(safeRead(root, settingsFile).toString('utf8')).dataFolder;
+    // An unusable value makes the plugin refuse to load (it never falls back), so `Kioku` is checked.
+    if (typeof configured === 'string' && normalizeDataFolder(configured)) folder = normalizeDataFolder(configured);
+  }
+  return { folder, existed: safePath(root, join(paths.vault, ...folder.split('/')), 'directory', true) };
+}
+
+/**
+ * Opening / closing the deck picker must not create the review data folder (not even an empty one,
+ * which a file snapshot cannot see). A folder that already existed before startup (a vault with
+ * earlier ratings) is allowed; its files are covered by the content baseline.
+ */
+export function assertNoReviewDataFolder(root, baseline) {
+  const current = reviewDataFolder(root);
+  const before = baseline?.dataFolder;
+  if (before?.existed === true && before.folder === current.folder) {
+    if (!current.existed) throw new Error(`Review data folder disappeared since before startup: ${current.folder}`);
+    return { folder: current.folder, status: 'PRESENT-SINCE-BASELINE' };
+  }
+  if (current.existed) throw new Error(`Review data folder was created without a rating: ${current.folder}`);
+  return { folder: current.folder, status: 'ABSENT' };
 }
 
 export function assertNotesUnchanged(root, baseline) {

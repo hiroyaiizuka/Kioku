@@ -1,5 +1,6 @@
 import { MarkdownView, TFile, type App } from 'obsidian';
 import { planAdoption, type RecordedCandidate } from './adoption';
+import { errorMessage } from './error-message';
 import { extractCandidates, type CardText } from './parser';
 import { REASONS, canvasEmbeds, canvasUnreadable, writeFailed } from './reasons';
 
@@ -27,11 +28,7 @@ export async function readNote(app: App, file: TFile): Promise<string> {
   return view ? view.editor.getValue() : app.vault.read(file);
 }
 
-/** Message of a thrown value, also for errors from another realm (e.g. a popout window). */
-export function errorMessage(error: unknown): string {
-  const message = (error as { message?: unknown } | null)?.message;
-  return typeof message === 'string' ? message : String(error);
-}
+export { errorMessage };
 
 const UNCONFIRMED = REASONS.unconfirmedWrite;
 

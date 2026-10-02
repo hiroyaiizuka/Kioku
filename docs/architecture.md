@@ -1,14 +1,16 @@
 # Kioku アーキテクチャ
 
-## M0 runtime（M1 でも維持）
+## Runtime の基本（M0 から、M2 で更新）
 
-`src/main.ts` は plugin lifecycle、ribbon と command の登録、modal の所有だけを行う。`src/ui/startup-modal.ts` は公開 `Modal` API で scoped class の中央 modal を描く。起動、ribbon、状態 modal の表示はノート、Vault、workspace state、ネットワーク、Node/Electron API、他プラグイン API へ触れない（M1 の読み書きは後述の明示操作時だけ）。runtime dependency はなく、`obsidian` は host external である。
+`src/main.ts` は plugin lifecycle、ribbon・command・file-menu・設定タブの登録、modal の所有だけを行う。起動（`onload`）はノート、Vault、`Kioku/`、プラグインの `data.json`、workspace state、ネットワーク、Node/Electron API、他プラグイン API へ触れない。設定（`data.json`）は最初に必要になったとき（デッキ選択・設定タブ）に読む。M1 のノート読み書きと M2 の走査・保存は、後述の明示操作時だけ。
 
-同じ `StartupModal` instance を再利用し、unload 時に閉じる。表示ごとに内容を再構築し、close で内容を片付ける。画面には version と build ID を data attribute と文字列で出し、実機 smoke が今の配布物を識別できる。実装済み範囲と未実装（M1 時点ではデッキ・復習・AI）を UI 自身が明示する。
+**ribbon（M2 から）**：左 ribbon「フラッシュカード」はデッキ選択 modal（`src/ui/deck-picker-modal.ts`）を開く。その root（`.kioku-deck-picker-modal`）は version と build ID を data attribute に持ち、実機 smoke が今の配布物を識別できる。状態 modal（`src/ui/startup-modal.ts`、version/build ID と実装状況）はコマンド「フラッシュカード（状態）」とデッキ選択の「状態」ボタンから開く。同じ `StartupModal` instance を再利用し、unload 時に閉じる。実装済み範囲と未実装（M2 時点では AI）を UI 自身が明示する。
+
+**runtime dependency（M2 から）**：ts-fsrs 5.4.2（MIT、推移依存なし）だけを exact pin し、`main.js` に bundle する（external は `obsidian` のまま）。ts-fsrs は `src/review/scheduler.ts` の内側だけで使う。ts-fsrs はモジュール評価時に `Date.prototype` へ4つの非推奨 helper を代入するため、`src/review/fsrs-guard.ts` が import 前の descriptor を記録し、import 直後に元へ戻す（Obsidian の共有 window を汚さない。ts-fsrs 自身はそれらを使わない）。
 
 ## Build identity と配布物
 
-production esbuild は browser/CJS/ES2021、external は `obsidian` だけ。build ID は `src/`、manifest、package/lock、Node/TS/build script、styles の SHA-256 一覧から導く。`dist/kioku/` は `main.js`、`manifest.json`、`styles.css`、`build-info.json` の4ファイルだけ。build-info は入力、3 plugin file の hash、external import を記録する。自分自身の hash は自己参照になるため持たず、preflight は build-info bytes を dist と installed で比較する。
+production esbuild は browser/CJS/ES2021、external は `obsidian` だけ。bundle する依存（ts-fsrs）の MIT 著作権表示と許諾文を `main.js` 先頭のコメントに残す。build ID は `src/`、manifest、package/lock、Node/TS/build script、styles、bundle する依存の `package.json`・`dist/index.mjs`・`LICENSE` の SHA-256 一覧から導く。validate は runtime dependency が `{"ts-fsrs": "5.4.2"}` ちょうどで、lock・インストール済み版・MIT・推移依存なしが一致することを検査し、build-info は `bundledDependencies` を記録する。`dist/kioku/` は `main.js`、`manifest.json`、`styles.css`、`build-info.json` の4ファイルだけ。build-info は入力、3 plugin file の hash、external import を記録する。自分自身の hash は自己参照になるため持たず、preflight は build-info bytes を dist と installed で比較する。
 
 ## Tooling trust boundary
 
@@ -96,16 +98,16 @@ A: 光エネルギーで CO2 と水から糖を作る反応
 
 抽出も同じ規則で読む。アクティブなビューが Reading view のときは選択範囲を使わず、編集中のビューがあればその editor、無ければファイルを読む。
 
-起動、ribbon、状態ポップアップの表示ではノートを読まず書かない。読み取りは「抽出」コマンド/ボタンの明示操作時だけ、書き込みは「採用」時だけで、「破棄」と閉じるは何も書かない。破棄はこのポップアップの表示から外すだけで、ノートに見送り記録を残さない（再抽出すると再び候補に出る）。
+起動と状態ポップアップの表示ではノートを読まず書かない（M2 以降の ribbon はデッキ選択を開き、そこでノートを読み取り専用で走査するが書かない）。M1 の読み取りは「抽出」コマンド/ボタンの明示操作時だけ、書き込みは「採用」時だけで、「破棄」と閉じるは何も書かない。破棄はこのポップアップの表示から外すだけで、ノートに見送り記録を残さない（再抽出すると再び候補に出る）。
 
 ### モジュール構成
 
 - `src/cards/`：Obsidian に依存しない純粋ロジック。`regions`（除外領域）、`parser`（候補抽出・ID/編集記録の読み取り・重複判定）、`card-id`（ID 生成）、`adoption`（照合と挿入文字列の計算）。
 - `src/cards/writer.ts`：Editor / `Vault.process` への書き込み。公開 API（`MarkdownView`、`Editor.transaction`、`Vault.process`）のみ。
-- `src/ui/startup-modal.ts`：ribbon の状態ポップアップ。実装状況を表示し、抽出ボタンを持つ（開くだけでは I/O しない）。
+- `src/ui/startup-modal.ts`：状態ポップアップ（M1 時点は ribbon から、M2 からはコマンドとデッキ選択のボタンから）。実装状況を表示し、抽出ボタンを持つ（開くだけでは I/O しない）。
 - `src/ui/candidate-modal.ts`：中央の候補ポップアップ（原文、編集欄、採用/破棄）。
 - `src/ui/extract.ts`：アクティブノートと選択範囲を読み、候補ポップアップを開く。
-- `src/main.ts`：ribbon/command の登録と lifecycle のみ。
+- `src/main.ts`：ribbon/command（M2 から設定タブも）の登録と lifecycle のみ。
 
 選択範囲がある場合は、文書全体を解析した上で選択範囲と重なるブロックだけを候補にする（選択が fence 内なら除外は維持される）。
 
@@ -114,27 +116,39 @@ A: 光エネルギーで CO2 と水から糖を作る反応
 - `%%`、`$$`、`<!--` は行単位の個数/位置で判定する。インラインコード内の `%%` などで奇数になると、それ以降を保守的に除外し候補が減ることがある（誤って書き込む方向には働かない）。Excalidraw ノートで描画データより前に奇数個の `%%` がある場合も同様で、候補が出ないだけで書き込みは安全側。
 - 状態 modal・候補 modal の UI 文言は公式 lint の sentence-case 規則を既定設定のまま守るため、文中では「Q/A」ではなく「問い・答え」と書き、構文例 `Q:` / `A:` は独立した `code` 要素で表示する。
 
-## M2 タグデッキと復習（LEV-276、設計確定・未実装）
+## M2 タグデッキと復習（LEV-276、実装済み・実機確認前）
 
-2026-10-02 に利用者が決定した設計の概要。詳細・理由・実機チェックリストは `docs/m2-design.md`、利用者向けの FSRS の説明は `docs/fsrs.md`。**以下は実装前の設計であり、コードはまだ存在しない。** 実装時に上記 M0/M1 の記述（runtime dependency なし、ribbon が状態 modal を開く等）を合わせて更新する。
+2026-10-02 に利用者が決定した設計（`docs/m2-design.md`）に沿って実装した。利用者向けの FSRS の説明は `docs/fsrs.md`。**専用 Vault での実機確認（`docs/harness.md`「M2 実機確認」）はまだで、実機での動作は未確認。**
 
 ### 方針
 
 - M2 はノートを書かない。カードは M1 の parser で読み取り専用に走査し、`^kioku-<id>`（大文字小文字を区別）で識別する。走査はデッキ選択を開いたときだけで、起動時は読み書きしない。
-- デッキは設定のトリガータグ（既定 `#kioku`）とその子タグ。タグは大文字小文字を区別せず、ノート全体に適用し、frontmatter（`parseFrontMatterTags`）と本文（`CachedMetadata.tags` のうち M1 の除外領域外）から取る。親は子を含み、「全デッキ」は和集合。セッションはカード ID の集合で作り、二重出題しない。
-- 日程は FSRS（ts-fsrs 5.4.2 を bundle、`request_retention=0.9`、`enable_short_term=false`、fuzz なし）。期日はローカル 04:00 区切りの「Kioku 日」の日付文字列で持ち、ts-fsrs にはその日の UTC 正午に正規化した時刻を渡す。
-- ribbon はデッキ選択 modal を開く。状態 modal（version/build ID）と抽出はコマンド・file-menu・デッキ選択のボタンから。smoke はデッキ選択の identity を検査するよう更新する。
+- デッキは設定のトリガータグ（既定 `#kioku`）とその子タグ。タグは大文字小文字を区別せず、ノート全体に適用し、frontmatter（`parseFrontMatterTags`）と本文（`CachedMetadata.tags` のうち M1 の除外領域外）から取る。親は子を含み、「全デッキ」は和集合。トリガーが1つのときは根を表示せず、その子を最上位に並べる。セッションはカード ID の集合で作り、二重出題しない。同じ ID が複数ノートにあれば、有効な問い/答え（空白正規化後）が同じなら1枚（パス順で最初のノート）、異なれば除外して全パスを表示する。
+- 日程は FSRS（ts-fsrs 5.4.2、`request_retention=0.9`、`enable_short_term=false`、fuzz なし）。期日はローカル `dayStartHour`（既定 4 時）区切りの「Kioku 日」の日付文字列で持ち、ts-fsrs にはその日の 12:00 UTC を渡す（UTC 暦日差と固定 24 時間加算が Kioku 日の差と一致し、夏時間の影響を受けない）。期日が評価日以前になる結果は翌日に切り上げる（同日内の再出題なし）。新規カードの New 初回間隔は Again 1 / Hard 2 / Good 3 / Easy 8 日（単体テストで固定）。
+- 新規は1日 `newPerDay`（既定 20、`null` で無制限）。今日導入した数（`today.newIntroduced`、履歴の再生でも数える）と「今日だけ あと N 枚」（`today.extraNew`、`state.json` だけに保存、翌 Kioku 日に無効。最初の評価より前はメモリ上だけに持ち、何も作らない）で残りを決める。キューは Due（期日の古い順）→ New（パス順・出現順）で、New は表示のたびに残り枠と照合するので、スキップした New は枠を使わない。
 
 ### 保存と安全策
 
-- `<Vault>/Kioku/`（設定で変更可）に `state.json`（カード状態）、`state.json.bak`、`history-YYYY.jsonl`（評価イベントの追記のみ、Skip は記録しない）。プラグインの `data.json` は設定だけ（`saveData`）。
-- デッキ選択の開閉では何も作らない。履歴が正本で状態はキャッシュ。評価ごとに一意の `eventId` を持つイベントを履歴へ追記し、読み戻して確認できたら保存済みとして次へ進む。その後に状態を更新する（セッション最初の更新前に `.bak`、失敗しても次回の再生で追いつく）。再生位置は履歴の行数と最後の `eventId` で持ち（時刻では決めない）、再生時は `eventId` で重複を除く。
-- ファイルが存在しないときだけ新規扱い。存在するのに読めない・検証に失敗・未知の `schemaVersion` のときは読み取り専用にし、何も書かない。`state.json` が無く履歴がある場合は履歴から再構築する。履歴の最終行だけが途中で切れている場合は、確認ボタンで利用者が承認したときだけその行を `history-YYYY.jsonl.broken` へ退避して続行し、それ以外の破損は読み取り専用のまま。`dataFolder` の変更は、新フォルダにデータが無く旧フォルダにある場合は適用しない。
-- Q/A を編集しても ID が同じなら日程・履歴を保持し、履歴に内容ハッシュを残す。ID が見つからないカードのデータは削除しない。
+- `<Vault>/<dataFolder>/`（既定 `Kioku`）に `state.json`、`state.json.bak`、`history-YYYY.jsonl`（年は評価の Kioku 日）。プラグインの `data.json` は設定だけ（`saveData`）。I/O は公開 `DataAdapter`（`app.vault.adapter` の `exists`/`read`/`write`/`append`/`mkdir`/`list`）だけで行う。
+- デッキ選択の開閉では何も作らない・書かない。フォルダとファイルは最初の評価で初めて作る（例外は既存の記録に対する「退避して続ける」の明示操作だけ。「今日だけ追加」は `state.json` が既にあるときだけ保存する）。
+- 履歴が正本で状態はキャッシュ。評価1件：一意の `eventId`（`<cardId>:<ランダム10文字>`）を持つイベントを作る → 追記の直前に履歴ファイル全体を読み直して検証（壊れた行・途中で切れた最終行があれば書かずに読み取り専用、改行なしの正しい最終行なら先頭に `\n` を足す）→ 1行追記（常に `append`。ファイルが無ければ `append` が作るので、存在判定の誤りで履歴を `write` で置き換えることはない。追記先はその評価の年のファイルか、既にあるより新しい年のファイル。時計を年をまたいで戻しても追記順と再生順が一致する）→ 読み戻して末尾がその `eventId` であることを確認できたら「保存済み」→ 状態を再生で更新し `state.json` を書く（このストアで最初の書き込みの前に既存の `state.json` を読み直して検証し `.bak` にコピー。読めなければ書かない。書き込みは `state.json.tmp` に書いて読み戻し確認してから `rename` で置き換える。上書きの `rename` を拒む adapter では先に `state.json` を消してから `rename` する。その隙間で落ちると `state.json` が無い状態になり、次回は履歴から作り直す（失うのはその日の「今日だけ追加」だけ））。`state.json` の失敗は Notice を1回出すだけで進行は止めない。追記の失敗・未確認は理由を表示し、「もう一度保存する」は同じイベント（同じ `eventId`）で再試行する。末尾が既にその `eventId` なら追記しない。
+- イベントは評価後の日程（phase・dueDay・stability・difficulty・reps・lapses）も持ち、再生はスケジューラを再実行せずにそれを適用する（ライブラリの版が変わっても過去の日程は変わらない）。
+- 読み込み時は `state.json` の `applied`（ファイルごとの反映済み行番号と、その行の `eventId`）より後ろだけを再生する。ファイルはあるが位置の行の `eventId` が一致しない場合は全履歴を空の状態から再生し直す。`applied` が指すファイルが無い・反映済み行数より短い場合は、残りから再生すると日程を黙って失うので読み取り専用にする（追記直前の読み直しでも同じ判定をする。`state.json` が無いときは有効な `state.json.tmp`、無ければ `.bak` の `applied` で同じ判定をする）。どちらでも `eventId` の重複は1回だけ適用する。時刻（`at`）は位置決めに使わない。
+- ファイルが**存在しない**ときだけ新規扱い（`exists` で明示的に確認）。存在するのに読めない・検証に失敗・未知の `schemaVersion`、履歴の壊れた行・未知の版の行は読み取り専用（評価ボタン無効、理由とファイル名・行番号を表示、何も書かない）。表示用の件数は読めた範囲から作る。
+- 履歴の最終行だけが改行なしで途中で切れている場合は読み取り専用にし、デッキ選択の確認ボタン「不完全な最終行を退避して続ける」を押したときだけ、①その1行を `history-YYYY.jsonl.broken` に追記して読み戻し確認、②履歴からその行だけを取り除いて読み戻し確認、③読み直す。確認後にファイルが変わっていれば何もしない。
+- `dataFolder` の変更は、新フォルダにデータが無く旧フォルダにある場合は適用しない（ファイルは移動しない）。
+- Q/A を編集しても ID が同じなら日程・履歴を保持し、各イベントに評価時の有効な問い/答えの SHA-256（`contentHash`）を残す。ID が見つからないカードのデータは削除しない。
 
-### モジュール（予定）
+### 復習 UI
 
-- `src/decks/`：`tags.ts`・`index.ts`（純粋）、`scan.ts`（metadataCache と `cachedRead`）。
-- `src/review/`：`scheduler.ts`（ts-fsrs ラッパ）、`day.ts`、`queue.ts`（純粋・決定的、時刻は引数）。
-- `src/store/`：`schema.ts`（純粋。検証・移行・履歴再生）、`review-store.ts`（`Kioku/` の I/O）、`settings.ts`（`data.json`）。
-- `src/ui/`：`deck-picker-modal.ts`、`review-modal.ts`、`settings-tab.ts`。`src/main.ts` は登録と lifecycle のみ。
+- デッキ選択と復習画面は同じ中央 modal。問いは `MarkdownRenderer` で描画し、答えを表示する前は保守的に、すべての `![` から `!` を外し（wiki・Markdown・参照形式の埋め込み）、`<img>`・`<iframe>` などの埋め込み HTML を文字として表示し、コードブロックの info string（`dataview` など）を外して他の renderer を動かさない（`src/review/conceal.ts`）。描画用の `Component` は画面の切り替えと modal の close で unload する。
+- キー入力は modal の `containerEl` の capture 段の `keydown` で1経路だけで処理する（`Space`/`Enter` = 答えを表示、またはフォーカス中の Kioku ボタンの操作、`1`–`4` = 評価、`S` = スキップ）。処理したキーは `preventDefault` するので、フォーカス中のボタンのネイティブな click と二重に動かない。さらに Space/Enter の `keyup` も抑止し、ボタンの click は描画ごとの token で古い画面のボタンを無視する。`event.repeat`、`isComposing`、`key === 'Process'`、修飾キー付きは無視し、保存中は評価・スキップ・表示の入力をすべて無視してボタンを無効化する。`Escape` は Obsidian の Modal に任せる。
+
+### モジュール
+
+- 状態と履歴の先頭の UTF-8 BOM は無視する。メタデータの索引がまだ無いノートは数えず、デッキ選択に「索引中のノート N 件（あとで再読み込み）」と表示する。
+- `src/decks/`：`tags.ts`・`index.ts`（純粋。トリガー一致、除外領域での絞り込み、ツリー、ID 重複）、`scan.ts`（`metadataCache` と `cachedRead`。トリガータグのあるノートはすべて読む。`kioku-` の block キーだけのノートはデッキ外の件数のために読む）。
+- `src/review/`：`types.ts`、`day.ts`、`scheduler.ts`（ts-fsrs ラッパ）、`fsrs-guard.ts`、`queue.ts`、`event.ts`（イベント作成と内容ハッシュ）。純粋・決定的で、時刻は引数。
+- 記録するイベントは追記の前に再生と同じ検証を通す（`^kioku-` のように本体の無い ID は走査の段階で除外し、デッキ選択に注記する）。設定（`data.json`）が読めない・学習データのフォルダが不正な場合は既定値に黙って戻さず、デッキ選択を開かず設定タブも保存しない。復習中に Kioku 日が変わったら評価せずにデッキ選択を読み直す。追記の失敗後は「もう一度保存する」か閉じるだけにする。
+- `src/store/`：`schema.ts`（純粋。検証・履歴の解析・再生）、`review-store.ts`（`<dataFolder>/` の I/O と安全策、フォルダ変更ガード）、`settings.ts`（`data.json` の解釈と遅延読み込み）、`reasons.ts`（M2 の理由文）。
+- `src/ui/`：`deck-picker-modal.ts`、`review-screen.ts`（同じ modal 内の復習画面）、`settings-tab.ts`。`src/main.ts` は登録と lifecycle のみ。

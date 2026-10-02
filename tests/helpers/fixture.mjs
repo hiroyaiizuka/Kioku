@@ -11,7 +11,9 @@ const copies = ['.nvmrc', 'AGENTS.md', 'LICENSE', 'README.md', 'manifest.json', 
   'scripts/validate.mjs', 'scripts/harness-cli.mjs', 'scripts/lib/harness.mjs',
   'scripts/e2e/smoke.mjs', 'scripts/e2e/assert-smoke.mjs',
   'scripts/lib/note-baseline.mjs',
-  'scripts/lib/paths.mjs', '.claude/skills/review-check/SKILL.md'];
+  'scripts/lib/paths.mjs', '.claude/skills/review-check/SKILL.md',
+  // The bundled runtime dependency: build inputs and the module esbuild resolves inside the fixture.
+  'node_modules/ts-fsrs/package.json', 'node_modules/ts-fsrs/dist/index.mjs', 'node_modules/ts-fsrs/LICENSE'];
 let serial = 0;
 const generated = new Set();
 

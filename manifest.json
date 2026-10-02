@@ -3,7 +3,7 @@
   "name": "Kioku",
   "version": "0.0.1",
   "minAppVersion": "1.8.7",
-  "description": "PC 用。開いているノートの明示 Q/A を確認・編集し、採用したものだけ元ノートに印を付けます。デッキ・復習・AI は未実装です。",
+  "description": "PC 用。開いているノートの明示 Q/A を確認・採用し、タグで決まるデッキで FSRS による間隔反復の復習ができます。AI は未実装です。",
   "author": "Kioku contributors",
   "isDesktopOnly": true
 }

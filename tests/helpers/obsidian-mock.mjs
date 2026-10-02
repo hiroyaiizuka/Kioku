@@ -8,13 +8,85 @@ import { join } from 'node:path';
 export class MockModal {
   constructor(app) {
     this.app = app;
+    this.containerEl = document.createElement('div');
     this.modalEl = document.createElement('section');
     this.contentEl = document.createElement('div');
     this.modalEl.append(this.contentEl);
+    this.containerEl.append(this.modalEl);
+    // Stands in for the Modal scope's Escape handler (bubble phase, after Kioku's capture listener).
+    this.containerEl.addEventListener('keydown', (event) => { if (event.key === 'Escape') this.close(); });
   }
-  setTitle(text) { const heading = document.createElement('h2'); heading.textContent = text; this.modalEl.prepend(heading); }
-  open() { if (!this.modalEl.isConnected) { document.body.append(this.modalEl); this.onOpen(); } }
-  close() { if (this.modalEl.isConnected) { this.onClose(); this.modalEl.remove(); } }
+  setTitle(text) {
+    this.titleEl ??= this.modalEl.insertBefore(document.createElement('h2'), this.modalEl.firstChild);
+    this.titleEl.textContent = text;
+  }
+  open() { if (!this.containerEl.isConnected) { document.body.append(this.containerEl); this.onOpen(); } }
+  close() { if (this.containerEl.isConnected) { this.onClose(); this.containerEl.remove(); } }
+}
+
+/** Public Component lifecycle; every instance is kept so tests can check that all were unloaded. */
+export class MockComponent {
+  static instances = [];
+  constructor() { this.loaded = false; this.unloaded = false; MockComponent.instances.push(this); }
+  load() { this.loaded = true; }
+  unload() { this.unloaded = true; }
+}
+/** Records what would be rendered as Markdown; the text itself is shown as-is. */
+export const renders = [];
+export const MockMarkdownRenderer = {
+  render(_app, markdown, el, sourcePath, component) {
+    renders.push({ markdown, sourcePath, component });
+    el.textContent = markdown;
+    return Promise.resolve();
+  },
+};
+export function parseFrontMatterTags(frontmatter) {
+  const tags = frontmatter?.tags;
+  if (tags === undefined || tags === null) return null;
+  return (Array.isArray(tags) ? tags : String(tags).split(/[,\s]+/)).filter(Boolean).map((tag) => `#${String(tag).replace(/^#/, '')}`);
+}
+
+/** DOM-backed Setting / components: inputs fire onChange on 'input' / 'change'. */
+class MockSetting {
+  constructor(containerEl) {
+    this.settingEl = containerEl.createDiv({ cls: 'setting-item' });
+    this.nameEl = this.settingEl.createDiv({ cls: 'setting-item-name' });
+    this.descEl = this.settingEl.createDiv({ cls: 'setting-item-description' });
+    this.controlEl = this.settingEl.createDiv({ cls: 'setting-item-control' });
+  }
+  setName(name) { this.nameEl.textContent = name; return this; }
+  setDesc(desc) { this.descEl.textContent = desc; return this; }
+  addText(build) {
+    const inputEl = this.controlEl.createEl('input', { cls: 'mock-text' });
+    const text = { inputEl,
+      setValue(value) { inputEl.value = value; return text; }, setPlaceholder(value) { inputEl.placeholder = value; return text; },
+      setDisabled(value) { inputEl.disabled = value; return text; },
+      onChange(fn) { inputEl.addEventListener('input', () => fn(inputEl.value)); return text; } };
+    build(text); return this;
+  }
+  addToggle(build) {
+    const inputEl = this.controlEl.createEl('input', { cls: 'mock-toggle' }); inputEl.type = 'checkbox';
+    const toggle = { setValue(value) { inputEl.checked = value; return toggle; }, setTooltip() { return toggle; },
+      onChange(fn) { inputEl.addEventListener('change', () => fn(inputEl.checked)); return toggle; } };
+    build(toggle); return this;
+  }
+  addDropdown(build) {
+    const selectEl = this.controlEl.createEl('select', { cls: 'mock-dropdown' });
+    const dropdown = { addOption(value, label) { const option = selectEl.createEl('option', { text: label }); option.value = value; return dropdown; },
+      setValue(value) { selectEl.value = value; return dropdown; },
+      onChange(fn) { selectEl.addEventListener('change', () => fn(selectEl.value)); return dropdown; } };
+    build(dropdown); return this;
+  }
+  addButton(build) {
+    const buttonEl = this.controlEl.createEl('button', { cls: 'mock-button' });
+    const button = { setButtonText(value) { buttonEl.textContent = value; return button; },
+      onClick(fn) { buttonEl.addEventListener('click', fn); return button; } };
+    build(button); return this;
+  }
+}
+class MockPluginSettingTab {
+  constructor(app, plugin) { this.app = app; this.plugin = plugin; this.containerEl = document.createElement('div'); }
+  hide() { this.containerEl.replaceChildren(); }
 }
 export class MockMarkdownView {
   constructor(file, editor, mode = 'source') { this.file = file; this.editor = editor; this.mode = mode; this.saves = 0; this.onSave = null; }
@@ -73,7 +145,10 @@ export async function compilePlugin(source, notices) {
     external: ['obsidian'], define: { __KIOKU_VERSION__: '"0.0.1"', __KIOKU_BUILD_ID__: '"unit-build"' } });
   class MockNotice { constructor(message) { notices.push(message); } }
   class MockPlugin {
-    constructor(app) { this.app = app; this.ribbons = []; this.commands = []; this.events = []; }
+    constructor(app) { this.app = app; this.ribbons = []; this.commands = []; this.events = []; this.settingTabs = []; this.data = null; this.saved = []; this.loadDataCalls = 0; }
+    async loadData() { this.loadDataCalls += 1; return this.data; }
+    async saveData(data) { this.saved.push(data); this.data = JSON.parse(JSON.stringify(data)); }
+    addSettingTab(tab) { this.settingTabs.push(tab); }
     addRibbonIcon(_icon, title, callback) {
       const item = document.createElement('button'); item.setAttribute('aria-label', title); item.addEventListener('click', callback);
       document.body.append(item); this.ribbons.push(item); return item;
@@ -81,17 +156,44 @@ export async function compilePlugin(source, notices) {
     addCommand(command) { this.commands.push(command); return command; }
     registerEvent(ref) { this.events.push(ref); }
   }
-  const obsidian = { Plugin: MockPlugin, Modal: MockModal, MarkdownView: MockMarkdownView, Notice: MockNotice, TFile: MockTFile };
+  const obsidian = { Plugin: MockPlugin, Modal: MockModal, MarkdownView: MockMarkdownView, Notice: MockNotice, TFile: MockTFile,
+    Component: MockComponent, MarkdownRenderer: MockMarkdownRenderer, parseFrontMatterTags, PluginSettingTab: MockPluginSettingTab,
+    Setting: MockSetting };
   const module = { exports: {} };
   // Timers resolve globalThis at call time so vitest fake timers control the plugin's window timers.
   const timers = { setTimeout: (...args) => globalThis.setTimeout(...args), clearTimeout: (id) => globalThis.clearTimeout(id) };
-  vm.runInNewContext(result.outputFiles[0].text, { module, exports: module.exports, crypto: globalThis.crypto, window: timers, AbortController: globalThis.AbortController,
-    require: (id) => { if (id === 'obsidian') return obsidian; throw new Error(id); }, console });
+  const context = { module, exports: module.exports, crypto: globalThis.crypto, window: timers, AbortController: globalThis.AbortController,
+    TextEncoder: globalThis.TextEncoder, require: (id) => { if (id === 'obsidian') return obsidian; throw new Error(id); }, console };
+  // The plugin's Date is the test's Date at call time, so vitest fake time controls Kioku days.
+  Object.defineProperty(context, 'Date', { get: () => globalThis.Date });
+  vm.runInNewContext(result.outputFiles[0].text, context);
   return module.exports.default;
 }
 
+/** A minimal metadata cache like Obsidian's: frontmatter tags, body tags with lines, block IDs. */
+export function cacheFor(text) {
+  const lines = text.split(/\r?\n/);
+  const cache = { tags: [], blocks: {} };
+  let start = 0;
+  if (lines[0] === '---') {
+    const close = lines.indexOf('---', 1);
+    if (close > 0) {
+      start = close + 1;
+      const match = lines.slice(1, close).join('\n').match(/^tags:\s*\[?([^\]\n]*)\]?/m);
+      cache.frontmatter = { tags: match ? match[1].split(/[,\s]+/).filter(Boolean) : undefined };
+    }
+  }
+  lines.forEach((line, index) => {
+    if (index < start) return;
+    for (const match of line.matchAll(/(?:^|\s)(#[^\s#]+)/g)) cache.tags.push({ tag: match[1], position: { start: { line: index } } });
+    const block = line.match(/\s\^([A-Za-z0-9-]+)\s*$/);
+    if (block) cache.blocks[block[1].toLowerCase()] = { id: block[1] };
+  });
+  return cache;
+}
+
 /** An app whose note I/O is observable: views hold editors, closed files live in `files`. */
-export function createApp({ files = {}, views = [], active = null, canvases = [] } = {}) {
+export function createApp({ files = {}, views = [], active = null, canvases = [], adapter = null } = {}) {
   const calls = [];
   const modifyListeners = new Set();
   /** Writes a file the way another view or Obsidian would, firing the public `modify` event. */
@@ -107,8 +209,14 @@ export function createApp({ files = {}, views = [], active = null, canvases = []
         return type === 'canvas' ? canvases.map((file) => ({ view: { file } })) : [];
       },
       on(name, callback) { return { name, callback }; },
+      async openLinkText(link, source, newLeaf) { calls.push(`workspace.openLinkText:${link}|${source}|${newLeaf}`); },
+    },
+    metadataCache: {
+      getFileCache(file) { calls.push(`metadataCache.getFileCache:${file.path}`); return typeof files[file.path] === 'string' ? cacheFor(files[file.path]) : null; },
     },
     vault: {
+      adapter,
+      getMarkdownFiles() { calls.push('vault.getMarkdownFiles'); return Object.keys(files).filter((path) => path.endsWith('.md')).map((path) => new MockTFile(path)); },
       async read(file) { calls.push(`vault.read:${file.path}`); return files[file.path]; },
       async cachedRead(file) { calls.push(`vault.cachedRead:${file.path}`); return files[file.path]; },
       async process(file, fn) {

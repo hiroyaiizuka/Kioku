@@ -6,8 +6,8 @@ export interface BuildIdentity {
 }
 
 /**
- * Ribbon status popup. Opening it never reads or writes notes; the extract button hands
- * control to the explicit extraction action.
+ * Status popup (command and deck picker button). Opening it never reads or writes notes; the
+ * extract button hands control to the explicit extraction action.
  */
 export class StartupModal extends Modal {
   constructor(app: App, private readonly identity: BuildIdentity, private readonly onExtract: () => void) {
@@ -19,15 +19,15 @@ export class StartupModal extends Modal {
     this.modalEl.addClass('kioku-startup-modal');
     this.setTitle('Kioku — 状態');
     this.contentEl.createEl('p', {
-      text: 'M1：開いているノート（または選択範囲）に明示した問い・答えを候補として確認・編集し、採用したものだけ元ノートへ保存できます。',
+      text: '開発版：トリガータグ（既定 #kioku）のデッキで、採用したカードを間隔反復の日程で復習できます（左の「フラッシュカード」ボタン）。問い・答えの候補確認・採用も使えます。専用の確認用保管場所での実機確認はまだです。',
       cls: 'kioku-startup-status',
     });
     this.contentEl.createEl('p', {
-      text: 'デッキ・復習（間隔反復）・AI による候補作成は未実装です。',
+      text: 'AI による候補作成は未実装です。',
       cls: 'kioku-startup-unimplemented',
     });
     this.contentEl.createEl('p', {
-      text: 'この画面を開くだけではノートを読み書きしません。外部送信も行いません。',
+      text: 'この画面を開くだけではノートを読み書きしません。外部送信も行いません。復習の記録は学習データのフォルダ（設定で変更可）にだけ保存し、ノート本文は書き換えません。',
     });
     const build = this.contentEl.createEl('p', { cls: 'kioku-build-identity' });
     build.createSpan({ text: `Kioku ${this.identity.version} · Build ${this.identity.buildId}` });

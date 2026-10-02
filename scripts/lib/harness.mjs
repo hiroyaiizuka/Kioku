@@ -40,7 +40,7 @@ export function prepareVault(root) {
   ensureDirectory(root, paths.installed);
   for (const [file, bytes] of build.files) atomicWrite(root, join(paths.installed, file), bytes);
   atomicWrite(root, paths.enabled, '["kioku"]\n');
-  atomicWrite(root, join(paths.vault, 'Welcome.md'), '# Kioku 専用テスト Vault\n\nM1：明示 Q/A（Q:/A:）の候補確認・編集・採用だけを実装しています。デッキ・復習・AI は未実装です。\n左 ribbon の「フラッシュカード」で状態ポップアップを開けます。\nこのノートの変更は harness:update で上書きされません。\n');
+  atomicWrite(root, join(paths.vault, 'Welcome.md'), '# Kioku 専用テスト Vault\n\nM2 開発版：明示 Q/A（Q:/A:）の候補確認・採用と、トリガータグ（既定 #kioku）のデッキでの復習（FSRS）を実装しています（実機確認前）。AI は未実装です。\n左 ribbon の「フラッシュカード」でデッキ選択、コマンド「フラッシュカード（状態）」で状態ポップアップを開けます。\n復習の記録は最初の評価のときに Kioku/ フォルダへ保存されます。\nこのノートの変更は harness:update で上書きされません。\n');
   return preflight(root);
 }
 
