@@ -53,7 +53,7 @@ export function createJevJudge(options: JevOptions): DecisionProvider {
     label: 'Jev',
     external: true,
     endpointHost: JEV_HOST,
-    async decide(state, questions, signal): Promise<ProviderOutcome<Readonly<Record<string, DecisionResult>>>> {
+    async decide(state, questions, signal, progress): Promise<ProviderOutcome<Readonly<Record<string, DecisionResult>>>> {
       const started = options.clock.now();
       const ms = (): number => options.clock.now() - started;
       const result = await call(options.http, {
@@ -61,7 +61,7 @@ export function createJevJudge(options: JevOptions): DecisionProvider {
         method: 'POST',
         headers: { Authorization: `Bearer ${options.apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: options.model, state, questions }),
-      }, { gate: options.gate, clock: options.clock, signal, timeoutMs: options.timeoutMs });
+      }, { gate: options.gate, clock: options.clock, signal, timeoutMs: options.timeoutMs, ...progress });
       if (!result.ok) return { ok: false, failure: result.failure, ms: ms() };
       const body = parseJson(result.response.text);
       const answers = isRecord(body) ? body.answers : null;

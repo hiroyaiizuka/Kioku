@@ -107,6 +107,11 @@ export type GenerationResult =
 export interface RunCallbacks {
   /** The run waits for a slot held by earlier (possibly abandoned) requests. */
   onWaiting(): void;
+  /**
+   * A call of this run got its slot and is sending: the wait (if any) is over. Fired for the
+   * generation call (each send) and for every judge call.
+   */
+  onSending(stage: 'generation' | 'judge'): void;
   onGenerated(result: GenerationResult): void;
   /** One candidate's judgement; `failure` is a user-facing reason when the judge call failed. */
   onJudged(index: number, judgement: Judgement, failure: string | null): void;
@@ -125,9 +130,9 @@ export interface RunContext {
  */
 export async function runPipeline(prep: Preparation & { readonly ok: true }, context: RunContext, callbacks: RunCallbacks,
   signal: AbortSignal): Promise<void> {
-  // Every slot is held by earlier requests (e.g. abandoned after a cancel on a hung server).
-  if (prep.generatorGate.inFlight >= prep.generatorGate.capacity) callbacks.onWaiting();
-  const generation = await prep.generator.generate({ source: prep.source.text, maxCandidates: MAX_CANDIDATES }, signal);
+  // One generation call per run: if it has to wait, earlier (e.g. abandoned) requests hold the slot.
+  const generation = await prep.generator.generate({ source: prep.source.text, maxCandidates: MAX_CANDIDATES }, signal,
+    { onWaiting: () => callbacks.onWaiting(), onSending: () => callbacks.onSending('generation') });
   if (signal.aborted) {
     callbacks.onGenerated({ ok: false, message: 'キャンセルしました。', cancelled: true });
     return;
@@ -151,7 +156,7 @@ export async function runPipeline(prep: Preparation & { readonly ok: true }, con
   await Promise.all(report.candidates.map(async (candidate, index) => {
     const state = judgeState(prep.source.text, candidate.quote.sentStart, candidate.quote.sentEnd, candidate.quote.text,
       candidate.card.question, candidate.card.answer);
-    const outcome = await judge.decide(state, JUDGE_QUESTIONS, signal);
+    const outcome = await judge.decide(state, JUDGE_QUESTIONS, signal, { onSending: () => callbacks.onSending('judge') });
     if (signal.aborted) {
       callbacks.onJudged(index, unjudged('キャンセル'), null);
       return;

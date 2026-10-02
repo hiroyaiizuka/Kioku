@@ -84,7 +84,8 @@ type AiPhase =
   | { readonly kind: 'ready'; readonly prep: ReadyPreparation; readonly notice: string }
   /** The run button was pressed: settings and the note are being re-read; nothing is sent yet. */
   | { readonly kind: 'preparing'; readonly prep: ReadyPreparation }
-  | { readonly kind: 'running'; readonly prep: ReadyPreparation; readonly startedAt: number; waiting: boolean; generated: boolean }
+  /** `startedAt`: when the generation request was actually sent (reset after a wait for a slot). */
+  | { readonly kind: 'running'; readonly prep: ReadyPreparation; startedAt: number; waiting: boolean; generated: boolean }
   | { readonly kind: 'finished'; readonly prep: ReadyPreparation; readonly message: string };
 
 /** Centered popup: original text, editable Q/A, adopt / discard per candidate; AI candidates on request. */
@@ -489,6 +490,14 @@ export class CandidateModal extends Modal {
     const current = (): boolean => this.shown && this.runId === runId;
     const generatedEntries: Entry[] = [];
     const callbacks: RunCallbacks = {
+      onSending: (stage) => {
+        if (!current()) return;
+        // The slot was acquired: leave the waiting notice; the generation counter starts at the real send.
+        const wasWaiting = running.waiting;
+        running.waiting = false;
+        if (stage === 'generation') running.startedAt = Date.now();
+        if (wasWaiting || stage === 'generation') this.render();
+      },
       onWaiting: () => {
         if (!current()) return;
         running.waiting = true;

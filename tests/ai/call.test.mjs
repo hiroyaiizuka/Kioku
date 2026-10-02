@@ -61,12 +61,18 @@ describe('call', () => {
     expect(gate.inFlight).toBe(1);
     // A new call waits (never sends) while the abandoned request still holds the only slot.
     const waits = [];
-    const second = call(http, REQUEST, options(clock, gate, undefined, { onWaiting: () => waits.push('wait') }));
+    const second = call(http, REQUEST, options(clock, gate, undefined,
+      { onWaiting: () => waits.push('wait'), onSending: () => waits.push('send') }));
     await drain();
     expect(waits).toEqual(['wait']); expect(http.requests).toHaveLength(1);
+    // The slot is freed long after: the new request then gets its full 20 s from the actual send.
+    await clock.advance(400000);
     http.release(0, { error: true });
     await drain();
+    expect(waits).toEqual(['wait', 'send']);
     expect(http.requests).toHaveLength(2);
+    await clock.advance(19999);
+    expect(clock.pending()).toBe(1);
     http.release(1, { status: 200 });
     expect((await second).ok).toBe(true);
     expect(gate.inFlight).toBe(0);

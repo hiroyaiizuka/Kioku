@@ -44,9 +44,17 @@ export interface ProviderInfo {
   readonly endpointHost: string;
 }
 
+/** Progress of one provider call, for the UI (optional). */
+export interface CallProgress {
+  /** Every slot is held (possibly by abandoned requests): the call waits before sending. */
+  readonly onWaiting?: () => void;
+  /** The call holds a slot and is about to send (again on each retry). */
+  readonly onSending?: () => void;
+}
+
 export interface DecisionProvider extends ProviderInfo {
   decide(state: string, questions: Readonly<Record<string, DecisionQuestion>>,
-    signal: AbortSignal): Promise<ProviderOutcome<Readonly<Record<string, DecisionResult>>>>;
+    signal: AbortSignal, progress?: CallProgress): Promise<ProviderOutcome<Readonly<Record<string, DecisionResult>>>>;
 }
 
 export interface GenerationInput {
@@ -72,7 +80,7 @@ export interface GenerationValue {
 }
 
 export interface GeneratorProvider extends ProviderInfo {
-  generate(input: GenerationInput, signal: AbortSignal): Promise<ProviderOutcome<GenerationValue>>;
+  generate(input: GenerationInput, signal: AbortSignal, progress?: CallProgress): Promise<ProviderOutcome<GenerationValue>>;
 }
 
 export interface HttpRequest {

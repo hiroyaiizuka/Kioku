@@ -25,9 +25,10 @@ function consented(ai, provider) {
   return { ...ai, providers: { ...ai.providers, [provider]: { ...ai.providers[provider], consent: consentFingerprint(provider, ai) } } };
 }
 function collect() {
-  const events = { waiting: 0, generated: null, judged: [] };
+  const events = { waiting: 0, sending: [], generated: null, judged: [] };
   return { events, callbacks: {
     onWaiting: () => { events.waiting += 1; },
+    onSending: (stage) => { events.sending.push(stage); },
     onGenerated: (result) => { events.generated = result; },
     onJudged: (index, judgement, failure) => { events.judged[index] = { ...judgement, failure }; },
   } };
@@ -201,6 +202,7 @@ describe('runPipeline', () => {
     second.abort();
     await retry;
     expect(events.generated).toMatchObject({ ok: false, cancelled: true });
+    expect(events.sending).toEqual([]);
     http.release(0, { error: true });
     await drain();
     const { events: later, callbacks: laterCallbacks } = collect();
@@ -231,6 +233,11 @@ describe('judge slots held by abandoned requests', () => {
     await drain();
     expect(events.waiting).toBe(1);
     expect(http.requests.filter((request) => request.url.startsWith(JEV_ENDPOINT))).toHaveLength(4);
+    expect(events.sending).toEqual(['generation']);
+    // One abandoned judge request settles: this run's first judge call gets the slot and sends.
+    http.release(1, { error: true });
+    await drain();
+    expect(events.sending).toEqual(['generation', 'judge']);
     second.abort();
     await retry;
     expect(events.judged.every((item) => item.label === '未判定（キャンセル）')).toBe(true);

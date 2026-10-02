@@ -48,7 +48,7 @@ export function createLocalGenerator(options: LocalGeneratorOptions): GeneratorP
     label: `${LOCAL_SERVER_LABELS[settings.server]}（${settings.model}）`,
     external: localIsExternal(settings),
     endpointHost: hostOf(settings.baseUrl),
-    async generate(input, signal): Promise<ProviderOutcome<GenerationValue>> {
+    async generate(input, signal, progress): Promise<ProviderOutcome<GenerationValue>> {
       const started = options.clock.now();
       const ms = (): number => options.clock.now() - started;
       const result = await call(options.http, {
@@ -65,7 +65,7 @@ export function createLocalGenerator(options: LocalGeneratorOptions): GeneratorP
           ],
           response_format: { type: 'json_schema', json_schema: { name: 'kioku_cards', strict: true, schema: GENERATION_SCHEMA } },
         }),
-      }, { gate: options.gate, clock: options.clock, signal, timeoutMs: options.timeoutMs });
+      }, { gate: options.gate, clock: options.clock, signal, timeoutMs: options.timeoutMs, ...progress });
       if (!result.ok) return { ok: false, failure: result.failure, ms: ms() };
       const body = parseJson(result.response.text);
       const choices: unknown[] = isRecord(body) && Array.isArray(body.choices) ? body.choices as unknown[] : [];

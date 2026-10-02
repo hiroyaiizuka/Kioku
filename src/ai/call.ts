@@ -55,6 +55,8 @@ export interface CallOptions {
   readonly timeoutMs: number;
   /** Called when the call has to wait for a slot held by earlier (possibly abandoned) requests. */
   readonly onWaiting?: () => void;
+  /** Called once a slot is held, right before the request is sent (also before each retry). */
+  readonly onSending?: () => void;
 }
 
 export type CallResult =
@@ -90,6 +92,7 @@ type Attempt = { readonly kind: 'response'; readonly response: HttpResponse } | 
 async function attempt(http: HttpClient, request: HttpRequest, options: CallOptions, remainingMs: number): Promise<Attempt> {
   const { gate, clock, signal } = options;
   if (!(await gate.acquire(signal, options.onWaiting))) return { kind: 'cancelled' };
+  options.onSending?.();
   const holder: { settled: Attempt | null } = { settled: null };
   const stop = new AbortController();
   const onAbort = (): void => stop.abort();
@@ -116,10 +119,15 @@ async function attempt(http: HttpClient, request: HttpRequest, options: CallOpti
 export async function call(http: HttpClient, request: HttpRequest, options: CallOptions): Promise<CallResult> {
   const { clock, signal, timeoutMs } = options;
   let spent = 0;
+  // The budget runs from the actual send: time spent waiting for a slot is not counted.
+  let sentAt = clock.now();
+  const sending: CallOptions = { ...options, onSending: () => {
+    sentAt = clock.now();
+    options.onSending?.();
+  } };
   for (let retry = 0; ; retry += 1) {
-    const started = clock.now();
-    const result = await attempt(http, request, options, Math.max(0, timeoutMs - spent));
-    spent += clock.now() - started;
+    const result = await attempt(http, request, sending, Math.max(0, timeoutMs - spent));
+    spent += clock.now() - sentAt;
     if (result.kind === 'cancelled') return { ok: false, failure: { kind: 'cancelled', detail: '' } };
     if (result.kind === 'timeout') return { ok: false, failure: { kind: 'timeout', detail: `${Math.round(timeoutMs / 1000)} 秒` } };
     if (result.kind === 'error') return { ok: false, failure: { kind: 'network', detail: '' } };

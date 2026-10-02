@@ -159,8 +159,12 @@ describe('AI section of the candidate popup', () => {
     section().querySelector('.kioku-ai-run').click(); await flush();
     expect(section().querySelector('.kioku-ai-status').textContent).toContain('前の要求の完了を待っています');
     expect(network.calls).toHaveLength(1);
+    // Seven minutes later the abandoned request settles: the new one is sent and the notice switches
+    // to the generation counter (from the real send) before its result arrives.
+    await vi.advanceTimersByTimeAsync(400000);
     pending[0](chat({ cards: [] })); await flush();
     expect(network.calls).toHaveLength(2);
+    expect(section().querySelector('.kioku-ai-status').textContent).toBe('生成中…（0 秒）');
     pending[1](chat({ cards: [] })); await flush();
     expect(section().querySelector('.kioku-ai-status').textContent).toContain('根拠を引用で示せる候補はありませんでした');
     document.querySelector('.kioku-candidate-close').click();
@@ -212,6 +216,22 @@ describe('AI settings tab', () => {
     expect(cloudConsent.querySelector('input').checked).toBe(false);
     // The Jev key and consent were kept while another AI field changed.
     expect(plugin.data.ai.providers.jev).toMatchObject({ apiKey: KEY, consent: 'jev|api.typesafe.ai|jev-latest' });
+    expect(network.calls).toEqual([]);
+  });
+
+  it('turning consent off for a cloud model clears the stored consent in data.json', async () => {
+    const model = 'gemma4:31b-cloud';
+    const consent = `local|ollama|http://localhost:11434|${model}`;
+    const { plugin } = open({ ai: ai({ providers: { local: { model, consent } } }) });
+    tab(plugin); await flush();
+    const toggle = field('外部への送信に同意する（localhost:11434）').querySelector('input');
+    expect(toggle.checked).toBe(true);
+    toggle.checked = false; toggle.dispatchEvent(new window.Event('change')); await flush();
+    expect(plugin.data.ai.providers.local.consent).toBeNull();
+    expect(field('外部への送信に同意する（localhost:11434）').querySelector('input').checked).toBe(false);
+    // And the popup then refuses to send.
+    await extract(plugin);
+    expect(section().querySelector('.kioku-ai-guidance').textContent).toContain('外部送信に同意していません');
     expect(network.calls).toEqual([]);
   });
 
