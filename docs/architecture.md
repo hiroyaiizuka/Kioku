@@ -113,3 +113,28 @@ A: 光エネルギーで CO2 と水から糖を作る反応
 
 - `%%`、`$$`、`<!--` は行単位の個数/位置で判定する。インラインコード内の `%%` などで奇数になると、それ以降を保守的に除外し候補が減ることがある（誤って書き込む方向には働かない）。Excalidraw ノートで描画データより前に奇数個の `%%` がある場合も同様で、候補が出ないだけで書き込みは安全側。
 - 状態 modal・候補 modal の UI 文言は公式 lint の sentence-case 規則を既定設定のまま守るため、文中では「Q/A」ではなく「問い・答え」と書き、構文例 `Q:` / `A:` は独立した `code` 要素で表示する。
+
+## M2 タグデッキと復習（LEV-276、設計確定・未実装）
+
+2026-10-02 に利用者が決定した設計の概要。詳細・理由・実機チェックリストは `docs/m2-design.md`、利用者向けの FSRS の説明は `docs/fsrs.md`。**以下は実装前の設計であり、コードはまだ存在しない。** 実装時に上記 M0/M1 の記述（runtime dependency なし、ribbon が状態 modal を開く等）を合わせて更新する。
+
+### 方針
+
+- M2 はノートを書かない。カードは M1 の parser で読み取り専用に走査し、`^kioku-<id>`（大文字小文字を区別）で識別する。走査はデッキ選択を開いたときだけで、起動時は読み書きしない。
+- デッキは設定のトリガータグ（既定 `#kioku`）とその子タグ。タグは大文字小文字を区別せず、ノート全体に適用し、frontmatter（`parseFrontMatterTags`）と本文（`CachedMetadata.tags` のうち M1 の除外領域外）から取る。親は子を含み、「全デッキ」は和集合。セッションはカード ID の集合で作り、二重出題しない。
+- 日程は FSRS（ts-fsrs 5.4.2 を bundle、`request_retention=0.9`、`enable_short_term=false`、fuzz なし）。期日はローカル 04:00 区切りの「Kioku 日」の日付文字列で持ち、ts-fsrs にはその日の UTC 正午に正規化した時刻を渡す。
+- ribbon はデッキ選択 modal を開く。状態 modal（version/build ID）と抽出はコマンド・file-menu・デッキ選択のボタンから。smoke はデッキ選択の identity を検査するよう更新する。
+
+### 保存と安全策
+
+- `<Vault>/Kioku/`（設定で変更可）に `state.json`（カード状態）、`state.json.bak`、`history-YYYY.jsonl`（評価イベントの追記のみ、Skip は記録しない）。プラグインの `data.json` は設定だけ（`saveData`）。
+- デッキ選択の開閉では何も作らない。履歴が正本で状態はキャッシュ。評価ごとに一意の `eventId` を持つイベントを履歴へ追記し、読み戻して確認できたら保存済みとして次へ進む。その後に状態を更新する（セッション最初の更新前に `.bak`、失敗しても次回の再生で追いつく）。再生位置は履歴の行数と最後の `eventId` で持ち（時刻では決めない）、再生時は `eventId` で重複を除く。
+- ファイルが存在しないときだけ新規扱い。存在するのに読めない・検証に失敗・未知の `schemaVersion` のときは読み取り専用にし、何も書かない。`state.json` が無く履歴がある場合は履歴から再構築する。履歴の最終行だけが途中で切れている場合は、確認ボタンで利用者が承認したときだけその行を `history-YYYY.jsonl.broken` へ退避して続行し、それ以外の破損は読み取り専用のまま。`dataFolder` の変更は、新フォルダにデータが無く旧フォルダにある場合は適用しない。
+- Q/A を編集しても ID が同じなら日程・履歴を保持し、履歴に内容ハッシュを残す。ID が見つからないカードのデータは削除しない。
+
+### モジュール（予定）
+
+- `src/decks/`：`tags.ts`・`index.ts`（純粋）、`scan.ts`（metadataCache と `cachedRead`）。
+- `src/review/`：`scheduler.ts`（ts-fsrs ラッパ）、`day.ts`、`queue.ts`（純粋・決定的、時刻は引数）。
+- `src/store/`：`schema.ts`（純粋。検証・移行・履歴再生）、`review-store.ts`（`Kioku/` の I/O）、`settings.ts`（`data.json`）。
+- `src/ui/`：`deck-picker-modal.ts`、`review-modal.ts`、`settings-tab.ts`。`src/main.ts` は登録と lifecycle のみ。
