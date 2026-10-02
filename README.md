@@ -92,6 +92,10 @@ Obsidian の設定 → Kioku で変更できます（設定はプラグインの
 - 日付の切り替え時刻（既定 4:00）
 - 学習データのフォルダ（既定 `Kioku`、上記の変更ガードあり）
 
+## 今後の予定
+
+- M3（設計確定、未実装）：AI による候補の判定と生成。外部送信は既定 OFF で、AI を設定しない場合は決定的な検査だけを行う予定です。設計は [M3 設計](docs/m3-design.md)。
+
 ## 開発ビルドを専用 Vault で確認する
 
 一般利用者向け Release はまだありません。開発者は Node.js 22.22.3 で `npm ci`、`npm run check`、初回だけ `npm run harness:prepare` を実行し、`npm run harness:launch`（macOS）でプロジェクト内の `test-vault/` だけを開く専用 Obsidian を起動します。普段の Obsidian は開いたままで構いません。終了は `npm run harness:quit` です。既存 Vault へ自動導入しないでください。詳しくは [開発手順](docs/development.md) と [ハーネス](docs/harness.md) を参照してください。
