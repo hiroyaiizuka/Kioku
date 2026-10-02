@@ -2,7 +2,7 @@
   "name": "kioku",
   "version": "0.0.1",
   "private": true,
-  "description": "Kioku M2 for Obsidian desktop: adopt explicit Q/A from notes and review them in tag decks scheduled with FSRS; AI is not implemented.",
+  "description": "Kioku M2 for Obsidian desktop: adopt explicit Q/A from notes and review them in tag decks scheduled with FSRS; AI candidate generation is partially implemented (opt-in, not yet verified natively).",
   "license": "MIT",
   "type": "module",
   "engines": { "node": "22.22.3" },
