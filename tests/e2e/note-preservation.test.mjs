@@ -16,9 +16,12 @@ function frame(text) {
   const head = data.length < 126 ? Buffer.from([0x81, data.length]) : Buffer.from([0x81, 126, data.length >>> 8, data.length & 255]);
   return Buffer.concat([head, data]);
 }
-/** `foreignModal`: false, true (open from the start) or 'after-first-close' (stacked over the second deck picker). */
+/**
+ * `foreignModal`: false, true (open from the start), 'after-first-close' (stacked over the second deck picker) or
+ * 'after-status' (appears once the status modal is closed). `uiOperations` counts clicks, commands and key events.
+ */
 async function simulatedSmoke(root, expected, baselineId, mutateAt, baselineMode = false, foreignModal = false) {
-  let modalCount = 0; let closes = 0; let kiokuModal = '';
+  let modalCount = 0; let closes = 0; let kiokuModal = ''; let statusClosed = false; let uiOperations = 0;
   const sockets = new Set();
   const server = createServer((_req, res) => {
     res.setHeader('content-type', 'application/json');
@@ -49,7 +52,8 @@ async function simulatedSmoke(root, expected, baselineId, mutateAt, baselineMode
         if (message.method === 'Runtime.evaluate') {
           const expression = message.params.expression; let value;
           if (expression.includes("'.modal-container'")) {
-            const foreign = foreignModal === true || (foreignModal === 'after-first-close' && closes >= 1);
+            const foreign = foreignModal === true || (foreignModal === 'after-first-close' && closes >= 1)
+              || (foreignModal === 'after-status' && statusClosed);
             value = [...(modalCount ? [{ kioku: true, classes: `modal ${kiokuModal}` }] : []),
               ...(foreign ? [{ kioku: false, classes: 'modal mod-lg mod-trust-folder' }] : [])];
           } else if (expression.includes("require?.('obsidian')")) {
@@ -60,9 +64,12 @@ async function simulatedSmoke(root, expected, baselineId, mutateAt, baselineMode
             value = { count: 1, buildId: expected.buildId, version: expected.version, loaded: true,
               text: expression.includes('kioku-deck-picker-modal') ? 'Kioku — デッキを選んで復習 全デッキ' : 'Kioku デッキ AI は未実装',
               x: 300, y: 200, width: 400, height: 300, viewportWidth: 1000, viewportHeight: 700 };
-          } else if (expression.includes('executeCommandById')) { modalCount = 1; kiokuModal = 'kioku-startup-modal'; value = true; }
-          else if (expression.includes('?.click()')) {
+          } else if (expression.includes('executeCommandById')) {
+            uiOperations += 1; modalCount = 1; kiokuModal = 'kioku-startup-modal'; value = true;
+          } else if (expression.includes('?.click()')) {
+            uiOperations += 1;
             if (expression.includes('-close')) {
+              if (kiokuModal === 'kioku-startup-modal') statusClosed = true;
               modalCount = 0; closes += 1;
               if (mutateAt === 'close' && closes === 1) writeFileSync(join(expected.vault, 'Welcome.md'), 'MUTATED ON CLOSE\n');
               if (mutateAt === 'kioku-folder' && closes === 1) mkdirSync(join(expected.vault, 'Kioku'));
@@ -73,7 +80,7 @@ async function simulatedSmoke(root, expected, baselineId, mutateAt, baselineMode
           if (!result.exceptionDetails) result = { result: { type: 'string', value: JSON.stringify(value) } };
         }
         if (message.method === 'Page.captureScreenshot') result = { data: '' }; // Synthetic, never actual evidence.
-        if (message.method === 'Input.dispatchKeyEvent') modalCount = 0;
+        if (message.method === 'Input.dispatchKeyEvent') { uiOperations += 1; modalCount = 0; }
         socket.write(frame(JSON.stringify({ id: message.id, result })));
       }
     });
@@ -86,7 +93,7 @@ async function simulatedSmoke(root, expected, baselineId, mutateAt, baselineMode
     let stdout = ''; let stderr = '';
     processHandle.stdout.on('data', (chunk) => stdout += chunk); processHandle.stderr.on('data', (chunk) => stderr += chunk);
     const status = await new Promise((resolve, reject) => { processHandle.on('exit', resolve); processHandle.on('error', reject); });
-    return { status, stdout, stderr };
+    return { status, stdout, stderr, uiOperations };
   } finally {
     if (processHandle?.exitCode === null) processHandle.kill();
     for (const socket of sockets) socket.destroy();
@@ -117,6 +124,14 @@ describe('real smoke CLI note preservation using non-UI CDP simulation', () => {
     expect(result.status).toBe(1); expect(result.stderr).toMatch(/Unexpected foreign modal open.*mod-trust-folder/);
     const report = JSON.parse(result.stdout);
     expect(report.status).toBe('FAIL'); expect(report.steps).toEqual([]);
+    expect(result.uiOperations).toBe(0);
+  });
+  it('fails instead of PASS when a foreign modal appears after the status modal is closed', async () => {
+    const { root, expected, id } = setup();
+    const result = await simulatedSmoke(root, expected, id, undefined, false, 'after-status');
+    expect(result.status).toBe(1); expect(result.stderr).toMatch(/Unexpected foreign modal open.*mod-trust-folder/);
+    const report = JSON.parse(result.stdout);
+    expect(report.status).toBe('FAIL'); expect(report.steps.at(-1).operation).toBe('command → status modal → close');
   });
   it('fails when a foreign modal is stacked over the open deck picker', async () => {
     const { root, expected, id } = setup();

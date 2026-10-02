@@ -59,7 +59,7 @@ export function modalObservation(selector, identitySelector) {
 export const kiokuModalClasses = ['kioku-startup-modal', 'kioku-deck-picker-modal', 'kioku-candidate-modal'];
 
 /**
- * Every open modal container; Kioku's own modal is recognised only by a scoped class on its `.modal` root.
+ * Every open modal container; Kioku's own modal is recognised only by a scoped class on the modal element inside the container.
  * `modalInventoryArrayExpression` evaluates to an ARRAY (for embedding inside another JSON.stringify(...));
  * `modalInventoryExpression` evaluates to its JSON STRING (for CDP.value, which JSON.parses the returned string).
  */
