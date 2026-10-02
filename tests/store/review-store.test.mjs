@@ -47,6 +47,35 @@ describe('loading never writes', () => {
     expect(store.problem.message).toMatch(/state\.json を読めません（EACCES）/);
   });
 
+  it('offers no repair when a truncated tail comes with corruption elsewhere (any read-only problem wins)', async () => {
+    const cut = serializeEvent(B1).slice(0, 40);
+    const adapter = new FakeAdapter({ 'Kioku/history-2026.jsonl': `{oops\n${lines(A1)}`, 'Kioku/history-2027.jsonl': cut });
+    const store = await ReviewStore.load(adapter, 'Kioku');
+    expect(store.problem).toEqual({ kind: 'read-only', message: expect.stringContaining('history-2026.jsonl の 1 行目') });
+    expect((await store.repairTruncated()).ok).toBe(false);
+    expect(adapter.writes()).toEqual([]);
+  });
+
+  it('writes nothing for 今日だけ追加 while read-only, even with an existing state.json', async () => {
+    const adapter = new FakeAdapter({ [H]: `${lines(A1)}{oops\n${lines(B1)}`, [S]: serializeState(stateFrom(lines(A1))) });
+    const store = await ReviewStore.load(adapter, 'Kioku');
+    expect(store.readOnly).toBe(true);
+    expect(await store.addExtraNew('2026-10-02', 10)).toBe(false);
+    expect(adapter.writes()).toEqual([]);
+  });
+
+  it('tolerates a UTF-8 BOM at the start of state.json and history', async () => {
+    const adapter = new FakeAdapter({ [H]: `\uFEFF${lines(A1)}`, [S]: `\uFEFF${serializeState(stateFrom(lines(A1)))}` });
+    const store = await ReviewStore.load(adapter, 'Kioku');
+    expect(store.readOnly).toBe(false);
+    expect(Object.keys(store.state.cards)).toEqual(['kioku-a']);
+    const cut = serializeEvent(B1).slice(0, 30);
+    const bom = new FakeAdapter({ [H]: `\uFEFF${cut}` });
+    const truncated = await ReviewStore.load(bom, 'Kioku');
+    expect((await truncated.repairTruncated()).ok).toBe(true);
+    expect(bom.files.get(H)).toBe('\uFEFF');
+  });
+
   it('becomes read-only with file and line for a corrupt middle line', async () => {
     const adapter = new FakeAdapter({ [H]: `${lines(A1)}{oops\n${lines(B1)}` });
     const store = await ReviewStore.load(adapter, 'Kioku');
@@ -92,7 +121,8 @@ describe('recording a rating', () => {
     const adapter = new FakeAdapter();
     const store = await ReviewStore.load(adapter, 'Kioku');
     expect(await store.record(A1)).toEqual({ ok: true, stateSaved: true });
-    expect(adapter.writes()).toEqual(['mkdir:Kioku', `write:${H}`, `write:${S}`]);
+    // History is always appended (never created by write); state.json is replaced via a verified temp file.
+    expect(adapter.writes()).toEqual(['mkdir:Kioku', `append:${H}`, 'write:Kioku/state.json.tmp', 'rename:Kioku/state.json.tmp->Kioku/state.json']);
     expect(adapter.files.get(H)).toBe(lines(A1));
     const saved = parseState(adapter.files.get(S));
     expect(saved.state.cards['kioku-a'].dueDay).toBe('2026-10-05');
@@ -150,7 +180,7 @@ describe('recording a rating', () => {
   it('does not remove the line when writing .broken cannot be confirmed', async () => {
     const cut = serializeEvent(B1).slice(0, 50);
     const adapter = new FakeAdapter({ [H]: lines(A1) + cut });
-    adapter.hooks.write = (path) => { if (path.endsWith('.broken')) throw new Error('disk full'); };
+    adapter.hooks.append = (path) => { if (path.endsWith('.broken')) throw new Error('disk full'); };
     const store = await ReviewStore.load(adapter, 'Kioku');
     expect((await store.repairTruncated()).ok).toBe(false);
     expect(adapter.files.get(H)).toBe(lines(A1) + cut);
@@ -186,7 +216,7 @@ describe('recording a rating', () => {
 
   it('keeps the rating when only state.json fails (history already has it)', async () => {
     const adapter = new FakeAdapter({ [H]: lines(A1) });
-    adapter.hooks.write = (path) => { if (path === S) throw new Error('EACCES'); };
+    adapter.hooks.write = (path) => { if (path.startsWith(S)) throw new Error('EACCES'); };
     const store = await ReviewStore.load(adapter, 'Kioku');
     expect(await store.record(B1)).toEqual({ ok: true, stateSaved: false });
     expect(store.state.cards['kioku-b']).toBeDefined();
@@ -213,13 +243,83 @@ describe('recording a rating', () => {
     expect(adapter.writes()).toEqual([]);
   });
 
-  it('stores 今日だけ追加 in state.json only', async () => {
+  it('keeps 今日だけ追加 in memory before the first rating (no folder, no file), then saves it with the rating', async () => {
     const adapter = new FakeAdapter();
     const store = await ReviewStore.load(adapter, 'Kioku');
     expect(await store.addExtraNew('2026-10-02', 10)).toBe(true);
     expect(await store.addExtraNew('2026-10-02', 20)).toBe(true);
-    expect(parseState(adapter.files.get(S)).state.today).toEqual({ day: '2026-10-02', newIntroduced: 0, extraNew: 30 });
+    expect(store.state.today).toEqual({ day: '2026-10-02', newIntroduced: 0, extraNew: 30 });
+    expect(adapter.writes()).toEqual([]);
+    expect(adapter.folders.has('Kioku')).toBe(false);
+    await store.record(A1);
+    expect(parseState(adapter.files.get(S)).state.today).toEqual({ day: '2026-10-02', newIntroduced: 1, extraNew: 30 });
+  });
+
+  it('saves 今日だけ追加 to an existing state.json (history stays untouched)', async () => {
+    const adapter = new FakeAdapter({ [H]: lines(A1), [S]: serializeState(stateFrom(lines(A1))) });
+    const store = await ReviewStore.load(adapter, 'Kioku');
+    expect(await store.addExtraNew('2026-10-02', 10)).toBe(true);
+    expect(parseState(adapter.files.get(S)).state.today).toEqual({ day: '2026-10-02', newIntroduced: 1, extraNew: 10 });
+    expect(adapter.files.get(H)).toBe(lines(A1));
+  });
+
+  it('writes state.json atomically: a crash while writing the temp file leaves state.json readable', async () => {
+    const before = serializeState(stateFrom(lines(A1)));
+    const adapter = new FakeAdapter({ [H]: lines(A1), [S]: before });
+    adapter.hooks.write = (path, data) => { if (path === 'Kioku/state.json.tmp') { adapter.files.set(path, data.slice(0, 10)); throw new Error('crash'); } };
+    const store = await ReviewStore.load(adapter, 'Kioku');
+    expect(await store.record(B1)).toEqual({ ok: true, stateSaved: false });
+    expect(adapter.files.get(S)).toBe(before);
+    const reloaded = await ReviewStore.load(adapter, 'Kioku');
+    expect(reloaded.readOnly).toBe(false);
+    expect(Object.keys(reloaded.state.cards).sort()).toEqual(['kioku-a', 'kioku-b']);
+  });
+
+  it('does not replace state.json with a temp file that did not land completely', async () => {
+    const before = serializeState(stateFrom(lines(A1)));
+    const adapter = new FakeAdapter({ [H]: lines(A1), [S]: before });
+    const write = adapter.write.bind(adapter);
+    adapter.write = async (path, data) => write(path, path.endsWith('.tmp') ? data.slice(0, 20) : data);
+    const store = await ReviewStore.load(adapter, 'Kioku');
+    expect(await store.record(B1)).toEqual({ ok: true, stateSaved: false });
+    expect(adapter.files.get(S)).toBe(before);
+  });
+
+  it('when rename cannot replace a file, removes state.json first; a crash in that gap rebuilds from history', async () => {
+    const adapter = new FakeAdapter({ [H]: lines(A1), [S]: serializeState(stateFrom(lines(A1))) });
+    const store = await ReviewStore.load(adapter, 'Kioku');
+    expect(await store.record(B1)).toEqual({ ok: true, stateSaved: true });
+    expect(adapter.writes()).toContain(`remove:${S}`);
+    expect(adapter.files.has('Kioku/state.json.tmp')).toBe(false);
+    adapter.renameOverwrites = true;
+    const direct = await ReviewStore.load(adapter, 'Kioku');
+    adapter.calls.length = 0;
+    expect((await direct.record(event('c', '1'))).ok).toBe(true);
+    expect(adapter.writes()).not.toContain(`remove:${S}`);
+    // Crash between remove and rename: no state.json, the temp file and .bak remain.
+    adapter.renameOverwrites = false;
+    const crashing = await ReviewStore.load(adapter, 'Kioku');
+    adapter.hooks.rename = (pair) => { if (!adapter.files.has(S) && pair.endsWith('state.json')) throw new Error('crash'); };
+    expect((await crashing.record(event('d', '1'))).ok).toBe(true);
+    adapter.hooks.rename = undefined;
+    expect(adapter.files.has(S)).toBe(false);
+    const rebuilt = await ReviewStore.load(adapter, 'Kioku');
+    expect(rebuilt.readOnly).toBe(false);
+    expect(Object.keys(rebuilt.state.cards).sort()).toEqual(['kioku-a', 'kioku-b', 'kioku-c', 'kioku-d']);
+  });
+
+  it('appends to the latest year file after the clock was set back across New Year (append order = replay order)', async () => {
+    const adapter = new FakeAdapter();
+    const store = await ReviewStore.load(adapter, 'Kioku');
+    const later = event('y', '1', { day: '2027-01-05', dueDay: '2027-01-08' });
+    const earlier = event('y', '2', { day: '2026-12-30', dueDay: '2027-01-20', phaseBefore: 'review', reps: 2 });
+    expect((await store.record(later)).ok).toBe(true);
+    expect((await store.record(earlier)).ok).toBe(true);
     expect(adapter.files.has(H)).toBe(false);
+    expect(adapter.files.get('Kioku/history-2027.jsonl')).toBe(lines(later, earlier));
+    const reloaded = await ReviewStore.load(adapter, 'Kioku');
+    expect(reloaded.state.cards['kioku-y'].dueDay).toBe('2027-01-20');
+    expect(store.state.cards['kioku-y'].dueDay).toBe('2027-01-20');
   });
 });
 

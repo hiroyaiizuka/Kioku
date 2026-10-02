@@ -5,7 +5,7 @@ import { scanVault, type ScanResult } from '../decks/scan';
 import { kiokuDay } from '../review/day';
 import { countCards, newAllowance, type ReviewCard } from '../review/queue';
 import type { CardSchedule, KiokuDay, KiokuSettings } from '../review/types';
-import { STORE_REASONS } from '../store/reasons';
+import { STORE_REASONS, notIndexed } from '../store/reasons';
 import { ReviewStore } from '../store/review-store';
 import { ReviewScreen } from './review-screen';
 import type { BuildIdentity } from './startup-modal';
@@ -38,6 +38,8 @@ export class DeckPickerModal extends Modal {
   private generation = 0;
   private loaded: Loaded | null = null;
   private review: ReviewScreen | null = null;
+  /** "今日だけ追加" not yet on disk (no rating yet): re-applied after the picker reloads the store. */
+  private unsavedExtra: { folder: string; day: KiokuDay; count: number } | null = null;
   private readonly onKeyDown = (evt: KeyboardEvent): void => {
     this.review?.handleKey(evt);
   };
@@ -83,6 +85,12 @@ export class DeckPickerModal extends Modal {
       const scan = await scanVault(this.app, settings.triggerTags);
       const store = await ReviewStore.load(this.app.vault.adapter, settings.dataFolder);
       const today = kiokuDay(this.options.now(), settings.dayStartHour);
+      const extra = this.unsavedExtra;
+      if (extra && extra.folder === settings.dataFolder && extra.day === today && !store.persistsExtraNew) {
+        store.applyExtraNew(extra.day, extra.count);
+      } else {
+        this.unsavedExtra = null;
+      }
       loaded = { settings, store, scan, index: buildDeckIndex(scan.notes, settings.triggerTags), today };
     } catch (error) {
       if (generation !== this.generation) return;
@@ -146,6 +154,7 @@ export class DeckPickerModal extends Modal {
       notes.createEl('p', { cls: 'kioku-deck-conflict',
         text: `内容の異なる同じ ID（${conflict.id}）のため出題しません：${conflict.paths.join(' / ')}` });
     }
+    if (scan.notIndexed) notes.createEl('p', { cls: 'kioku-deck-not-indexed', text: notIndexed(scan.notIndexed) });
     for (const invalid of scan.invalidIds) {
       notes.createEl('p', { cls: 'kioku-deck-invalid-id', text: `カード ID として使えない ID（^${invalid.id}）のため出題しません：${invalid.path}` });
     }
@@ -214,6 +223,11 @@ export class DeckPickerModal extends Modal {
       cards,
       today: loaded.today,
       now: this.options.now,
+      onExtraNew: (count) => {
+        if (loaded.store.persistsExtraNew) return;
+        const previous = this.unsavedExtra?.day === loaded.today ? this.unsavedExtra.count : 0;
+        this.unsavedExtra = { folder: loaded.settings.dataFolder, day: loaded.today, count: previous + count };
+      },
       openNote: (card) => {
         this.close();
         void this.app.workspace.openLinkText(`${card.path}#^${card.id}`, '', false);

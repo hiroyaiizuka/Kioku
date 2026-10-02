@@ -30,6 +30,18 @@ export class FakeAdapter {
     this.hook('append', path, data); this.requireParent(path);
     this.files.set(path, (this.files.get(path) ?? '') + data);
   }
+  /** Like a cautious adapter, refuses to rename over an existing file unless `renameOverwrites`. */
+  async rename(from, to) {
+    this.hook('rename', `${from}->${to}`); this.requireParent(to);
+    if (!this.files.has(from)) throw new Error(`ENOENT: ${from}`);
+    if (this.files.has(to) && !this.renameOverwrites) throw new Error('Destination file already exists!');
+    this.files.set(to, this.files.get(from)); this.files.delete(from);
+  }
+  async remove(path) {
+    this.hook('remove', path);
+    if (!this.files.has(path)) throw new Error(`ENOENT: ${path}`);
+    this.files.delete(path);
+  }
   async mkdir(path) { this.hook('mkdir', path); this.folders.add(path); this.addParents(`${path}/x`); }
   async list(path) {
     this.hook('list', path);

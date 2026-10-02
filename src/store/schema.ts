@@ -7,6 +7,15 @@ export const STATE_FILE = 'state.json';
 export const STATE_BACKUP_FILE = 'state.json.bak';
 export const HISTORY_FILE = /^history-(\d{4})\.jsonl$/;
 export const historyFileName = (day: string): string => `history-${day.slice(0, 4)}.jsonl`;
+/**
+ * The file a new event is appended to: its own year, or a later year file that already exists
+ * (after the clock was set back across New Year), so append order always equals replay order.
+ */
+export function appendTarget(day: string, existing: Iterable<string>): string {
+  let target = historyFileName(day);
+  for (const name of existing) if (HISTORY_FILE.test(name) && name > target) target = name;
+  return target;
+}
 export const brokenFileName = (historyFile: string): string => `${historyFile}.broken`;
 
 export const emptyState = (): KiokuStateV1 => ({ schemaVersion: 1, cards: {}, today: null, applied: {} });
@@ -21,7 +30,7 @@ export const isCardId = (value: unknown): value is string => typeof value === 's
 function validSchedule(value: unknown): value is CardSchedule {
   return isObject(value) && isPhase(value.phase) && isKiokuDay(value.dueDay) && isFiniteNumber(value.stability)
     && isFiniteNumber(value.difficulty) && isCount(value.reps) && isCount(value.lapses)
-    && (value.lastReviewDay === null || isKiokuDay(value.lastReviewDay));
+    && (value.lastReviewDay === null || (isKiokuDay(value.lastReviewDay) && value.dueDay > value.lastReviewDay));
 }
 
 function validToday(value: unknown): value is TodayCounter | null {
@@ -42,7 +51,7 @@ export type StateParse =
 export function parseState(text: string): StateParse {
   let value: unknown;
   try {
-    value = JSON.parse(text);
+    value = JSON.parse(text.replace(/^\uFEFF/, ''));
   } catch (error) {
     return { kind: 'invalid', detail: (error as Error).message };
   }
@@ -103,14 +112,17 @@ export interface HistoryParse {
 
 /**
  * Splits a history file on `\n` (a trailing `\r` is tolerated by JSON.parse). Blank lines are
- * skipped but counted, so line numbers always match a text editor's.
+ * skipped but counted, so line numbers always match a text editor's. A leading UTF-8 BOM (added by
+ * some editors) is ignored; offsets stay offsets into the original text.
  */
 export function parseHistory(text: string): HistoryParse {
   const entries: HistoryEntry[] = [];
-  const physical = text === '' ? [] : text.split('\n');
-  const terminated = text.endsWith('\n');
+  const bom = text.startsWith('\uFEFF') ? 1 : 0;
+  const body = text.slice(bom);
+  const physical = body === '' ? [] : body.split('\n');
+  const terminated = body.endsWith('\n');
   if (terminated) physical.pop();
-  let offset = 0;
+  let offset = bom;
   for (let index = 0; index < physical.length; index += 1) {
     const raw = physical[index] ?? '';
     const line = index + 1;

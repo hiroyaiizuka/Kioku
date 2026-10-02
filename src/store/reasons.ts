@@ -27,6 +27,7 @@ export const historyMissing = (path: string): string =>
 export const invalidEvent = '評価の記録を作れませんでした（カード ID が不正です）。';
 export const saveFailed = (detail: string): string => `記録ファイルに書き込めませんでした（${detail}）。`;
 
+export const notIndexed = (count: number): string => `索引中のノート ${count} 件（あとで再読み込み）。まだ Obsidian のメタデータが作られていないため、今回は数えていません。`;
 export const ratingNotSaved = (reason: string): string => `評価を保存できませんでした：${reason}`;
 export const folderChangeRefused = (oldFolder: string): string =>
   `古いフォルダ（${oldFolder}）にデータがあります。移動してから変更してください。`;

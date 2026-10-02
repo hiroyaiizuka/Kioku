@@ -12,6 +12,8 @@ export interface ScanResult {
   /** Notes that could not be read (path and reason). */
   readonly unreadable: readonly { readonly path: string; readonly reason: string }[];
   readonly scannedNotes: number;
+  /** Notes skipped because the metadata cache has no entry yet (still indexing). */
+  readonly notIndexed: number;
   /** `^kioku-…` block IDs that are not valid card IDs (e.g. `^kioku-`); never presented. */
   readonly invalidIds: readonly { readonly path: string; readonly id: string }[];
 }
@@ -28,9 +30,13 @@ export async function scanVault(app: App, triggers: readonly string[]): Promise<
   const unreadable: { path: string; reason: string }[] = [];
   const invalidIds: { path: string; id: string }[] = [];
   let scannedNotes = 0;
+  let notIndexed = 0;
   for (const file of app.vault.getMarkdownFiles()) {
     const cache = app.metadataCache.getFileCache(file);
-    if (!cache) continue;
+    if (!cache) {
+      notIndexed += 1;
+      continue;
+    }
     const frontmatterTags = parseFrontMatterTags(cache.frontmatter) ?? [];
     const bodyTags = (cache.tags ?? []).map((item) => ({ tag: item.tag, line: item.position.start.line }));
     const tagged = [...frontmatterTags, ...bodyTags.map((item) => item.tag)].some((tag) => matchesTrigger(tag, triggers));
@@ -53,5 +59,5 @@ export async function scanVault(app: App, triggers: readonly string[]): Promise<
       .map((item) => ({ id: item.cardId ?? '', ...(item.edit ?? { question: item.question, answer: item.answer }) }));
     if (cards.length) notes.push({ path: file.path, deckTags, cards });
   }
-  return { notes, unreadable, scannedNotes, invalidIds };
+  return { notes, unreadable, scannedNotes, invalidIds, notIndexed };
 }

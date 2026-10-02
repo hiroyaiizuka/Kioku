@@ -127,7 +127,7 @@ describe('review session', () => {
       dueDay: '2026-10-05', phaseBefore: 'new', scheduler: 'ts-fsrs@5.4.2' })]);
     expect(historyLines(adapter)[0].eventId).toMatch(/^kioku-dddddddddd:[0-9a-z]{10}$/);
     expect(JSON.parse(adapter.files.get(S)).cards['kioku-dddddddddd'].dueDay).toBe('2026-10-05');
-    expect(adapter.writes()).toEqual(['mkdir:Kioku', `write:${H}`, `write:${S}`]);
+    expect(adapter.writes()).toEqual(['mkdir:Kioku', `append:${H}`, 'write:Kioku/state.json.tmp', 'rename:Kioku/state.json.tmp->Kioku/state.json']);
     expect(phase()).toBe('question');
     expect(question()).toBe('心拍数は？');
     expect(document.querySelector('.kioku-review-remaining').textContent).toBe('残り 3 枚');
@@ -255,8 +255,8 @@ describe('keyboard safety', () => {
     const { adapter, plugin } = setup();
     let release;
     const gate = new Promise((resolve) => { release = resolve; });
-    const write = adapter.write.bind(adapter);
-    adapter.write = async (path, data) => { if (path === H) await gate; return write(path, data); };
+    const append = adapter.append.bind(adapter);
+    adapter.append = async (path, data) => { if (path === H) await gate; return append(path, data); };
     await startDeck(plugin);
     key(' '); key('2');
     await settle();
@@ -274,7 +274,7 @@ describe('keyboard safety', () => {
     const { adapter, plugin } = setup();
     let fail = true;
     let attempted = null;
-    adapter.hooks.write = (path, data) => { if (path === H && fail) { attempted = JSON.parse(data); throw new Error('EIO'); } };
+    adapter.hooks.append = (path, data) => { if (path === H && fail) { attempted = JSON.parse(data); throw new Error('EIO'); } };
     await startDeck(plugin);
     key(' '); key('3'); await settle();
     expect(phase()).toBe('failed');
@@ -298,9 +298,8 @@ describe('keyboard safety', () => {
     const { adapter, plugin } = setup();
     let release;
     const gate = new Promise((resolve) => { release = resolve; });
-    adapter.hooks.write = () => {};
-    const write = adapter.write.bind(adapter);
-    adapter.write = async (path, data) => { if (path === H) { await gate; throw new Error('EIO'); } return write(path, data); };
+    const append = adapter.append.bind(adapter);
+    adapter.append = async (path, data) => { if (path === H) { await gate; throw new Error('EIO'); } return append(path, data); };
     await startDeck(plugin);
     key(' '); key('3'); await settle();
     key('Escape');
@@ -354,11 +353,35 @@ describe('review edge cases', () => {
     expect(document.querySelector('.kioku-deck-list')).not.toBeNull();
   });
 
+  it('今日だけ追加 before any rating writes nothing and survives returning to the picker', async () => {
+    const { adapter, plugin } = setup({ settings: { newPerDay: 0 } });
+    await startDeck(plugin);
+    expect(phase()).toBe('done');
+    document.querySelector('.kioku-review-extra').click(); await settle();
+    expect(adapter.writes()).toEqual([]);
+    expect(question()).toBe('both');
+    document.querySelector('.kioku-review-back').click(); await settle();
+    expect(document.querySelector('.kioku-deck-allowance').textContent).toBe('今日の新規 残り 10 枚');
+    expect(adapter.folders.has('Kioku')).toBe(false);
+    row('全デッキ').click(); await settle();
+    key(' '); key('3'); await settle();
+    expect(JSON.parse(adapter.files.get(S)).today).toEqual({ day: '2026-10-02', newIntroduced: 1, extraNew: 10 });
+  });
+
+  it('shows how many notes were skipped because they are not indexed yet', async () => {
+    const { app, plugin } = setup();
+    const getFileCache = app.metadataCache.getFileCache;
+    app.metadataCache.getFileCache = (file) => (file.path === '学習/英語.md' ? null : getFileCache(file));
+    await openPicker(plugin);
+    expect(document.querySelector('.kioku-deck-not-indexed').textContent).toContain('索引中のノート 1 件（あとで再読み込み）');
+  });
+
   it('hides Markdown image embeds too before the answer is shown', async () => {
     const notes = { 'a.md': '#kioku\nQ: 図 ![図](answer.png) と ![[x.png]]\nA: y ^kioku-gggggggggg\n' };
     const { plugin } = setup({ notes });
     await startDeck(plugin);
     expect(question()).toBe('図 [図](answer.png) と [[x.png]]');
+    expect(renders.at(-1).markdown).toBe('図 [図](answer.png) と [[x.png]]');
     key(' ');
     expect(question()).toBe('図 ![図](answer.png) と ![[x.png]]');
   });

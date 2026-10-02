@@ -1,5 +1,6 @@
 import { Component, MarkdownRenderer, Notice, type App } from 'obsidian';
 import { errorMessage } from '../cards/error-message';
+import { hideEmbeds } from '../review/conceal';
 import { kiokuDay } from '../review/day';
 import { createReviewEvent } from '../review/event';
 import { ReviewQueue, newAllowance, type ReviewCard } from '../review/queue';
@@ -17,6 +18,8 @@ export interface ReviewContext {
   readonly cards: readonly ReviewCard[];
   readonly today: KiokuDay;
   readonly now: () => Date;
+  /** Called after a 今日だけ追加 (the picker keeps an unsaved one across reloads). */
+  readonly onExtraNew: (count: number) => void;
   readonly openNote: (card: ReviewCard) => void;
   readonly backToPicker: () => void;
   readonly close: () => void;
@@ -25,9 +28,6 @@ export interface ReviewContext {
 const GRADE_LABEL: Record<Grade, string> = { 1: 'もう一度', 2: '難しい', 3: '普通', 4: '簡単' };
 const EXTRA_NEW = [10, 20] as const;
 const DAY_CHANGED = 'Kioku：日付が変わったため、評価せずにデッキ選択を読み直しました。';
-
-/** `![[…]]` and `![…](…)` embeds are shown as plain links until the answer is revealed (they may show the answer). */
-export const hideEmbeds = (markdown: string): string => markdown.replace(/!\[\[/g, '[[').replace(/!\[([^\]\n]*)\]\(/g, '[$1](');
 
 type Phase = 'question' | 'answer' | 'saving' | 'failed' | 'done';
 type Action = () => void;
@@ -195,6 +195,7 @@ export class ReviewScreen {
     this.phase = 'saving';
     this.render();
     const saved = await this.ctx.store.addExtraNew(this.ctx.today, count);
+    this.ctx.onExtraNew(count);
     if (!saved) new Notice(STORE_REASONS.stateUpdateFailed);
     if (!this.closed) this.advance();
   }

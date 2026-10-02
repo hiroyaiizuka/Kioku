@@ -12,6 +12,8 @@ describe('state.json validation', () => {
       today: { day: '2026-10-02', newIntroduced: 1, extraNew: 10 }, applied: { 'history-2026.jsonl': { lines: 1, lastEventId: 'kioku-a:x' } } };
     expect(parseState(serializeState(state))).toEqual({ kind: 'ok', state });
     expect(parseState('{"schemaVersion":2,"cards":{}}')).toEqual({ kind: 'unknown-schema', version: '2' });
+    const stale = { ...state, cards: { 'kioku-a': { ...state.cards['kioku-a'], dueDay: '2026-10-02' } } };
+    expect(parseState(serializeState(stale)).kind).toBe('invalid'); // due not after the last review: ts-fsrs would throw
     for (const text of ['', '{', 'null', '[]', '{"cards":{}}', '{"schemaVersion":1,"cards":{"x":{}},"today":null,"applied":{}}',
       '{"schemaVersion":1,"cards":{},"today":{"day":"2026-13-01","newIntroduced":0,"extraNew":0},"applied":{}}',
       '{"schemaVersion":1,"cards":{},"today":null,"applied":{"notes.md":{"lines":1,"lastEventId":"a"}}}']) {
@@ -41,6 +43,8 @@ describe('history parsing', () => {
     expect(parseHistory(`${good}{"v":1,"cardId":"kioku-x"}\n`).problem).toMatchObject({ kind: 'corrupt', line: 2 });
     expect(parseHistory(`${good}{"v":2}\n`).problem).toEqual({ kind: 'unknown-version', line: 2, version: '2' });
     expect(parseHistory(good + cut).entries).toHaveLength(1);
+    // A row due on its own rating day (or earlier) is never valid: replay must not schedule same-day review.
+    expect(parseHistory(`${good}${JSON.stringify({ ...event('c', '1'), dueDay: '2026-10-02' })}\n`).problem).toMatchObject({ kind: 'corrupt', line: 2 });
   });
 });
 
