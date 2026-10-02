@@ -53,6 +53,25 @@ export function loadNoteBaseline(root, expected, id) {
   return baseline;
 }
 
+/**
+ * The deck picker must not create the review data folder (not even an empty one, which a file
+ * snapshot cannot see). The folder is `dataFolder` from the plugin's data.json, `Kioku` by default.
+ */
+export function assertNoReviewDataFolder(root) {
+  const paths = harnessPaths(root); assertGeneratedVault(paths);
+  const settingsFile = join(paths.installed, 'data.json');
+  let folder = 'Kioku';
+  if (safePath(root, settingsFile, 'file', true)) {
+    const configured = JSON.parse(safeRead(root, settingsFile).toString('utf8')).dataFolder;
+    if (typeof configured === 'string' && /^[^./][^:*?"<>|]*$/u.test(configured)
+        && !configured.split('/').includes('..')) folder = configured;
+  }
+  if (safePath(root, join(paths.vault, ...folder.split('/')), 'directory', true)) {
+    throw new Error(`Review data folder was created without a rating: ${folder}`);
+  }
+  return { folder, status: 'ABSENT' };
+}
+
 export function assertNotesUnchanged(root, baseline) {
   const actual = snapshotNotes(root);
   const changes = [...new Set([...Object.keys(baseline.files), ...Object.keys(actual)])].sort()

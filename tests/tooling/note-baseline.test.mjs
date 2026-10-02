@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, createFixture } from '../helpers/fixture.mjs';
 import { prepareVault } from '../../scripts/lib/harness.mjs';
-import { assertNotesUnchanged, captureNoteBaseline, loadNoteBaseline, snapshotNotes } from '../../scripts/lib/note-baseline.mjs';
+import { assertNoReviewDataFolder, assertNotesUnchanged, captureNoteBaseline, loadNoteBaseline, snapshotNotes } from '../../scripts/lib/note-baseline.mjs';
 
 const roots = [];
 const setup = () => { const root = createFixture(); roots.push(root); return { root, expected: prepareVault(root) }; };
@@ -39,6 +39,18 @@ describe('pre-startup note baseline filesystem contract (not native UI evidence)
       expect(() => assertNotesUnchanged(root, baseline)).toThrow(/Vault content changed/);
     });
   }
+  it('detects a created review data folder, even empty, at the configured or default path', () => {
+    const { root, expected } = setup();
+    expect(assertNoReviewDataFolder(root)).toEqual({ folder: 'Kioku', status: 'ABSENT' });
+    mkdirSync(join(expected.vault, 'Kioku'));
+    expect(() => assertNoReviewDataFolder(root)).toThrow(/created without a rating: Kioku/);
+    writeFileSync(join(expected.vault, '.obsidian/plugins/kioku/data.json'), JSON.stringify({ dataFolder: '学習/記録' }));
+    expect(assertNoReviewDataFolder(root).folder).toBe('学習/記録');
+    mkdirSync(join(expected.vault, '学習/記録'), { recursive: true });
+    expect(() => assertNoReviewDataFolder(root)).toThrow(/学習\/記録/);
+    writeFileSync(join(expected.vault, '.obsidian/plugins/kioku/data.json'), JSON.stringify({ dataFolder: '../outside' }));
+    expect(() => assertNoReviewDataFolder(root)).toThrow(/: Kioku/);
+  });
   it('rejects linked content and linked artifact parents', () => {
     const { root, expected } = setup();
     symlinkSync(join(root, 'manifest.json'), join(expected.vault, 'linked.md'));
