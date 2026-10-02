@@ -29,7 +29,8 @@ let notices;
 beforeEach(async () => {
   dom = installDom(); notices = [];
   Plugin = await compilePlugin(readFileSync('src/main.ts', 'utf8'), notices);
-  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+  // Date is faked too, so the 「生成中…（N 秒）」 counter (Date.now) moves with the fake timers.
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
 });
 afterEach(() => { vi.useRealTimers(); dom.window.close(); delete globalThis.document; delete globalThis.window; });
 
@@ -165,10 +166,29 @@ describe('AI section of the candidate popup', () => {
     pending[0](chat({ cards: [] })); await flush();
     expect(network.calls).toHaveLength(2);
     expect(section().querySelector('.kioku-ai-status').textContent).toBe('生成中…（0 秒）');
+    // The counter runs from that send, not from the click ~400 s earlier.
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(section().querySelector('.kioku-ai-status').textContent).toBe('生成中…（5 秒）');
     pending[1](chat({ cards: [] })); await flush();
     expect(section().querySelector('.kioku-ai-status').textContent).toContain('根拠を引用で示せる候補はありませんでした');
     document.querySelector('.kioku-candidate-close').click();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('keeps counting from the first send across a 429 retry (as the timeout budget does)', async () => {
+    const { plugin } = open({ ai: ai({ judge: 'none' }) });
+    const pending = [];
+    network.respond = () => (network.calls.length === 1
+      ? { status: 429, headers: { 'Retry-After': '2' }, text: '' } : new Promise((resolve) => pending.push(resolve)));
+    await extract(plugin);
+    section().querySelector('.kioku-ai-run').click(); await flush();
+    expect(section().querySelector('.kioku-ai-status').textContent).toBe('生成中…（0 秒）');
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(network.calls).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(section().querySelector('.kioku-ai-status').textContent).toBe('生成中…（3 秒）');
+    pending[0](chat({ cards: [] })); await flush();
+    document.querySelector('.kioku-candidate-close').click();
   });
 
   it('reports an unreachable local server without writing anything', async () => {

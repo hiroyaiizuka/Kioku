@@ -78,6 +78,22 @@ describe('call', () => {
     expect(gate.inFlight).toBe(0);
   });
 
+  it('does not charge the slot wait to the retry budget: a 429 after a long wait is still retried', async () => {
+    const clock = fakeClock();
+    const gate = new SlotGate(1);
+    const http = fakeHttp((_request, index) => (index === 0 ? 'hang' : index === 1 ? json({}, 429, { 'Retry-After': '3' }) : json({ fine: true })));
+    void call(http, REQUEST, options(clock, gate, undefined, { timeoutMs: 1000 })).catch(() => undefined);
+    await drain();
+    const second = call(http, REQUEST, options(clock, gate));
+    await clock.advance(400000);
+    http.release(0, { error: true });
+    await drain();
+    expect(http.requests).toHaveLength(2);
+    await clock.advance(3000);
+    expect(http.requests).toHaveLength(3);
+    expect(await second).toMatchObject({ ok: true, response: { status: 200 } });
+  });
+
   it('cancels while waiting for a slot and while a request is in flight; results arriving later are dropped', async () => {
     const clock = fakeClock();
     const gate = new SlotGate(1);
