@@ -153,12 +153,12 @@ A: 光エネルギーで CO2 と水から糖を作る反応
 - `src/store/`：`schema.ts`（純粋。検証・履歴の解析・再生）、`review-store.ts`（`<dataFolder>/` の I/O と安全策、フォルダ変更ガード）、`settings.ts`（`data.json` の解釈と遅延読み込み）、`reasons.ts`（M2 の理由文）。
 - `src/ui/`：`deck-picker-modal.ts`、`review-screen.ts`（同じ modal 内の復習画面）、`settings-tab.ts`。`src/main.ts` は登録と lifecycle のみ。
 
-## M3 AI による候補の判定と生成（LEV-277、設計案・実装前）
+## M3 AI による候補の判定と生成（LEV-277、設計確定・実装前）
 
-設計案と利用者決定は `docs/m3-design.md`。**未実装で、以下は予定の構成である。** 未決定事項（同 §2）が決まるまで実装しない。
+設計と利用者決定（2026-10-02）は `docs/m3-design.md`。**未実装で、以下は予定の構成である。**
 
-- 流れ：M1 と同じ読み取り規則で本文を確定 → 生成 provider（設定時だけ）が要約（事実と引用）から Q/A 候補を作る → 決定的検査（常に。引用が原文に完全一致しない生成候補は除外）→ 判定 provider（設定時だけ。Jev / Clef / ローカル logprobs）→ M1 の候補ポップアップで人が採用 → 生成カードは引用元の近くに新しい Q/A ブロックとして挿入（保存位置は未決定）。自動採用はしない。
+- 流れ：M1 と同じ読み取り規則で本文を確定 → 生成 provider（設定時だけ）が要約（事実と引用）から Q/A 候補を作る → 決定的検査（常に。引用が原文に完全一致しない生成候補は除外）→ 判定 provider（設定時だけ。Jev / Clef / ローカル logprobs）→ M1 の候補ポップアップで人が採用 → 生成カードは引用元のブロックの直後に新しい Q/A ブロックとして挿入。自動採用はしない。
 - provider：`DecisionProvider.decide(state, questions)` は Jev の systemone と同じ形（`noul` / `choice` / `score` → value・probabilities・confidence）、`GeneratorProvider.generate(source)` は引用付きの候補を返す。失敗は例外でなく結果型で返す。
 - 通信：Obsidian の `requestUrl` だけ（`src/ai/http.ts`）。それ以外の `src/ai/` は注入した HTTP クライアントを使う純粋コード。起動時・設定タブや候補ポップアップを開いただけでは通信しない。外部送信は既定 OFF で、provider ごとの同意と API キーがそろうまで送らない。外部かどうかは接続先（非 loopback）とモデル（Ollama の cloud モデル）で決める。ローカル判定の logprobs はサーバー種別ごとの endpoint で取る（Ollama は OpenAI 互換 chat、llama.cpp は `/completion`、LM Studio は `/v1/responses`）。判定 provider には「判定なし」もある。
-- 書き込み（保存位置は未決定。Q2 の推奨案の場合）：生成カードの挿入計画は純粋関数（`src/cards/insertion.ts`）とし、M1 の書き込み経路（原文照合、Canvas ガード、ディスク確認、1回だけの回復）を共有する。
-- 設定：`data.json`（`schemaVersion` は 1 のまま）に任意の `ai` セクションを足し、AI 設定と API キーを持つ（キーの保存先は未決定で、これは Q5 の推奨案。平文保存のリスクは `docs/m3-design.md` §7.3）。runtime 依存は増やさない。
+- 書き込み：生成カードの挿入計画は純粋関数（`src/cards/insertion.ts`）とし、M1 の書き込み経路（原文照合、Canvas ガード、ディスク確認、1回だけの回復）を共有する。
+- 設定：`data.json`（`schemaVersion` は 1 のまま）に任意の `ai` セクションを足し、AI 設定と API キーを持つ（`minAppVersion` 1.8.7 のまま。平文保存のリスクは `docs/m3-design.md` §7.3）。runtime 依存は増やさない。
