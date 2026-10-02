@@ -52,8 +52,19 @@ export class SettingsStore {
   constructor(private readonly loadData: () => Promise<unknown>,
     private readonly saveData: (data: KiokuSettings) => Promise<void>) {}
 
+  /**
+   * Rejects (and is retried next time) when data.json cannot be read or names an unusable data
+   * folder: silently falling back to the default folder would start a second, empty history.
+   */
   get(): Promise<KiokuSettings> {
-    this.current ??= this.loadData().then(parseSettings, () => DEFAULT_SETTINGS);
+    this.current ??= this.loadData().then((raw) => {
+      const folder = (raw as { dataFolder?: unknown } | null)?.dataFolder;
+      if (folder !== undefined && (typeof folder !== 'string' || !normalizeDataFolder(folder))) {
+        throw new Error(`設定の学習データのフォルダ（${JSON.stringify(folder)}）が使えません。設定で正しいフォルダを指定してください`);
+      }
+      return parseSettings(raw);
+    });
+    this.current.catch(() => { this.current = null; });
     return this.current;
   }
 

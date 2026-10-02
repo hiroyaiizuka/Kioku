@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { emptyState, parseHistory, parseState, replayHistory, serializeEvent, serializeState } from '../../src/store/schema.ts';
-import { DEFAULT_SETTINGS, normalizeDataFolder, parseSettings } from '../../src/store/settings.ts';
+import { emptyState, missingAppliedHistory, parseHistory, parseState, replayHistory, serializeEvent, serializeState } from '../../src/store/schema.ts';
+import { DEFAULT_SETTINGS, SettingsStore, normalizeDataFolder, parseSettings } from '../../src/store/settings.ts';
 import { event } from '../helpers/events.mjs';
 
 const lines = (...events) => events.map(serializeEvent).join('');
@@ -80,7 +80,18 @@ describe('replay from history (history is the source of truth)', () => {
     expect(result.fullReplay).toBe(true);
     expect(result.state.cards['kioku-ghost']).toBeUndefined();
     expect(result.state.today).toEqual({ day: '2026-10-02', newIntroduced: 2, extraNew: 10 });
-    expect(replayHistory(state, []).fullReplay).toBe(true); // the file disappeared
+    expect(replayHistory(state, []).fullReplay).toBe(true); // the file disappeared (the store refuses this case)
+    expect(missingAppliedHistory(state, [])).toBe('history-2026.jsonl');
+    expect(missingAppliedHistory(state, [file('history-2026.jsonl', lines(A1))])).toBe('history-2026.jsonl');
+    expect(missingAppliedHistory(state, [file('history-2026.jsonl', lines(B1, A1))])).toBeNull();
+  });
+
+  it('keeps a later 今日だけ追加 day across a full replay', () => {
+    const state = replayHistory(null, [file('history-2026.jsonl', lines(A1, B1))]).state;
+    const later = { ...state, today: { day: '2026-10-09', newIntroduced: 0, extraNew: 10 } };
+    const result = replayHistory(later, [file('history-2026.jsonl', lines(B1, A1))]);
+    expect(result.fullReplay).toBe(true);
+    expect(result.state.today).toEqual({ day: '2026-10-09', newIntroduced: 0, extraNew: 10 });
   });
 
   it('replays several year files in order', () => {
@@ -100,5 +111,19 @@ describe('settings (data.json)', () => {
       .toEqual({ schemaVersion: 1, triggerTags: ['Deck'], dayStartHour: 0, newPerDay: null, dataFolder: '学習/Kioku' });
     expect(parseSettings({ triggerTags: [], dayStartHour: 24, newPerDay: -1, dataFolder: '../x' })).toEqual(DEFAULT_SETTINGS);
     expect(['', ' / ', '.obsidian', 'a/../b', 'a:b'].map(normalizeDataFolder)).toEqual([null, null, null, null, null]);
+  });
+  it('never caches defaults over an unreadable data.json or an unusable data folder, and does not save then', async () => {
+    const saved = [];
+    let fail = true;
+    const store = new SettingsStore(async () => { if (fail) throw new Error('EACCES'); return { dataFolder: '学習' }; }, async (data) => { saved.push(data); });
+    await expect(store.get()).rejects.toThrow('EACCES');
+    await expect(store.update({ newPerDay: 5 })).rejects.toThrow('EACCES');
+    expect(saved).toEqual([]);
+    fail = false;
+    expect((await store.get()).dataFolder).toBe('学習');
+    const bad = new SettingsStore(async () => ({ dataFolder: '../outside' }), async (data) => { saved.push(data); });
+    await expect(bad.get()).rejects.toThrow(/学習データのフォルダ/);
+    await expect(bad.update({ dataFolder: 'Kioku' })).rejects.toThrow();
+    expect(saved).toEqual([]);
   });
 });

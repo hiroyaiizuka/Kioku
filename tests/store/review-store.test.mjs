@@ -56,6 +56,35 @@ describe('loading never writes', () => {
   });
 });
 
+describe('history that state.json already reflects must not disappear silently', () => {
+  it('is read-only when an applied history file is missing or shorter, and never shrinks state.json', async () => {
+    const full = serializeState(stateFrom(lines(A1, B1)));
+    for (const kioku of [{ [S]: full }, { [S]: full, [H]: lines(A1) }]) {
+      const adapter = new FakeAdapter(kioku);
+      const store = await ReviewStore.load(adapter, 'Kioku');
+      expect(store.problem).toEqual({ kind: 'read-only', message: expect.stringContaining('Kioku/history-2026.jsonl が見つからないか') });
+      expect((await store.record(event('c', '1'))).ok).toBe(false);
+      expect(adapter.writes()).toEqual([]);
+      expect(adapter.files.get(S)).toBe(full);
+    }
+  });
+  it('stops an append when the file became shorter than the applied position after loading', async () => {
+    const adapter = new FakeAdapter({ [H]: lines(A1, B1), [S]: serializeState(stateFrom(lines(A1, B1))) });
+    const store = await ReviewStore.load(adapter, 'Kioku');
+    adapter.files.set(H, lines(A1));
+    expect((await store.record(event('c', '1'))).ok).toBe(false);
+    expect(adapter.files.get(H)).toBe(lines(A1));
+    expect(store.readOnly).toBe(true);
+  });
+  it('never appends an event that replay would reject (e.g. the card ID `kioku-`)', async () => {
+    const adapter = new FakeAdapter();
+    const store = await ReviewStore.load(adapter, 'Kioku');
+    const bad = { ...event('x', '1'), cardId: 'kioku-', eventId: 'kioku-:0000000000' };
+    expect(await store.record(bad)).toEqual({ ok: false, reason: '評価の記録を作れませんでした（カード ID が不正です）。' });
+    expect(adapter.writes()).toEqual([]);
+  });
+});
+
 describe('recording a rating', () => {
   it('creates the folder and history on the first rating, verifies it, then writes state.json', async () => {
     const adapter = new FakeAdapter();

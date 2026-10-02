@@ -50,6 +50,19 @@ describe('pre-startup note baseline filesystem contract (not native UI evidence)
     expect(() => assertNoReviewDataFolder(root)).toThrow(/学習\/記録/);
     writeFileSync(join(expected.vault, '.obsidian/plugins/kioku/data.json'), JSON.stringify({ dataFolder: '../outside' }));
     expect(() => assertNoReviewDataFolder(root)).toThrow(/: Kioku/);
+    writeFileSync(join(expected.vault, '.obsidian/plugins/kioku/data.json'), JSON.stringify({ dataFolder: ' 学習\\記録/ ' }));
+    expect(() => assertNoReviewDataFolder(root)).toThrow(/学習\/記録/);
+  });
+  it('allows a data folder that already existed at the baseline (vault with earlier ratings), but not its removal', () => {
+    const { root, expected } = setup();
+    mkdirSync(join(expected.vault, 'Kioku'));
+    writeFileSync(join(expected.vault, 'Kioku', 'history-2026.jsonl'), '');
+    const baseline = captureNoteBaseline(root, expected, true);
+    expect(baseline.dataFolder).toEqual({ folder: 'Kioku', existed: true });
+    expect(loadNoteBaseline(root, expected, baseline.id).dataFolder).toEqual({ folder: 'Kioku', existed: true });
+    expect(assertNoReviewDataFolder(root, baseline).status).toBe('PRESENT-SINCE-BASELINE');
+    const fresh = { ...baseline, dataFolder: { folder: 'Kioku', existed: false } };
+    expect(() => assertNoReviewDataFolder(root, fresh)).toThrow(/created without a rating/);
   });
   it('rejects linked content and linked artifact parents', () => {
     const { root, expected } = setup();

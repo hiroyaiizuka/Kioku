@@ -282,6 +282,7 @@ describe('keyboard safety', () => {
     key('1'); key('s');
     expect(phase()).toBe('failed');
     fail = false;
+    expect(document.querySelector('.kioku-review-back').disabled).toBe(true);
     expect(document.activeElement.classList.contains('kioku-review-retry')).toBe(true);
     key('Enter'); await settle();
     const lines = historyLines(adapter);
@@ -335,6 +336,47 @@ describe('new-card limit', () => {
     vault = setup({ kioku, settings: { newPerDay: 2 } });
     await openPicker(vault.plugin);
     expect(document.querySelector('.kioku-deck-allowance').textContent).toBe('今日の新規 残り 2 枚');
+  });
+});
+
+describe('review edge cases', () => {
+  it('does not rate across the day boundary: the session is reloaded for the new day', async () => {
+    const { adapter, plugin } = setup();
+    await startDeck(plugin);
+    key(' ');
+    vi.setSystemTime(new Date(2026, 9, 3, 4, 1));
+    key('3'); await settle();
+    expect(notices).toEqual(['Kioku：日付が変わったため、評価せずにデッキ選択を読み直しました。']);
+    expect(adapter.writes()).toEqual([]);
+    expect(document.querySelector('.kioku-deck-list')).not.toBeNull();
+  });
+
+  it('hides Markdown image embeds too before the answer is shown', async () => {
+    const notes = { 'a.md': '#kioku\nQ: 図 ![図](answer.png) と ![[x.png]]\nA: y ^kioku-gggggggggg\n' };
+    const { plugin } = setup({ notes });
+    await startDeck(plugin);
+    expect(question()).toBe('図 [図](answer.png) と [[x.png]]');
+    key(' ');
+    expect(question()).toBe('図 ![図](answer.png) と ![[x.png]]');
+  });
+
+  it('skips adopted blocks whose ID is not a usable card ID and says so', async () => {
+    const notes = { 'a.md': '#kioku\nQ: bad\nA: x ^kioku-\n\nQ: good\nA: y ^kioku-gggggggggg\n' };
+    const { plugin } = setup({ notes });
+    await openPicker(plugin);
+    expect(rows()[0]).toBe('全デッキ | Due 0 · New 1 · Total 1');
+    expect(document.querySelector('.kioku-deck-invalid-id').textContent).toBe('カード ID として使えない ID（^kioku-）のため出題しません：a.md');
+  });
+
+  it('refuses to open with an unusable data folder in data.json instead of starting an empty one', async () => {
+    const { adapter, plugin } = setup({ settings: { dataFolder: '../outside' } });
+    await openPicker(plugin);
+    expect(document.querySelector('.kioku-deck-problem').textContent).toMatch(/読み込めませんでした（設定の学習データのフォルダ/);
+    expect(document.querySelector('.kioku-deck-row')).toBeNull();
+    const settingTab = plugin.settingTabs[0]; document.body.append(settingTab.containerEl); settingTab.display(); await settle();
+    expect(settingTab.containerEl.textContent).toContain('上書きしないよう変更できません');
+    expect(plugin.saved).toEqual([]);
+    expect(adapter.writes()).toEqual([]);
   });
 });
 

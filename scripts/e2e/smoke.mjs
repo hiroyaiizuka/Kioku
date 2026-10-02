@@ -89,7 +89,7 @@ try {
   const baseline = loadNoteBaseline(root, expected, process.env.KIOKU_BASELINE_ID);
   report.noteBaseline = { id: baseline.id, capturedAt: baseline.capturedAt, stage: baseline.stage, vaultClosed: baseline.vaultClosed };
   report.noteChecks = [{ phase: 'after startup, before UI operations (also after manual restart)',
-    ...assertNotesUnchanged(root, baseline), reviewData: assertNoReviewDataFolder(root) }];
+    ...assertNotesUnchanged(root, baseline), reviewData: assertNoReviewDataFolder(root, baseline) }];
   const endpoint = cdpEndpoint();
   report.endpoint = endpoint.href;
   const targets = await fetch(new URL('/json/list', endpoint)).then((response) => {
@@ -116,7 +116,7 @@ try {
   const count = (selector) => `JSON.stringify(document.querySelectorAll(${JSON.stringify(selector)}).length)`;
   const click = (selector) => client.value(`JSON.stringify((document.querySelector(${JSON.stringify(selector)})?.click(),true))`);
   const unchanged = (phase) => {
-    report.noteChecks.push({ phase, ...assertNotesUnchanged(root, baseline), reviewData: assertNoReviewDataFolder(root) });
+    report.noteChecks.push({ phase, ...assertNotesUnchanged(root, baseline), reviewData: assertNoReviewDataFolder(root, baseline) });
   };
   const ribbonCount = await client.value(count(ribbonSelector));
   if (ribbonCount !== 1) throw new Error('Enabled native Kioku ribbon absent or duplicated.');

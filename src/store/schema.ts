@@ -16,7 +16,7 @@ const isObject = (value: unknown): value is Json => typeof value === 'object' &&
 const isCount = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 0;
 const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 const isPhase = (value: unknown): value is CardPhase => PHASES.includes(value as CardPhase);
-const isCardId = (value: unknown): value is string => typeof value === 'string' && /^kioku-[A-Za-z0-9-]+$/.test(value);
+export const isCardId = (value: unknown): value is string => typeof value === 'string' && /^kioku-[A-Za-z0-9-]+$/.test(value);
 
 function validSchedule(value: unknown): value is CardSchedule {
   return isObject(value) && isPhase(value.phase) && isKiokuDay(value.dueDay) && isFiniteNumber(value.stability)
@@ -185,6 +185,20 @@ function positionsMatch(base: KiokuStateV1, files: readonly HistoryFile[]): bool
 }
 
 /**
+ * History that state.json says was already applied but that is now missing or shorter (a deleted,
+ * truncated or partially restored file). Replaying from what is left would silently drop schedules,
+ * so the store becomes read-only instead. Returns the file name, or null when consistent.
+ */
+export function missingAppliedHistory(base: KiokuStateV1, files: readonly HistoryFile[]): string | null {
+  const byName = new Map(files.map((file) => [file.name, file]));
+  for (const [name, position] of Object.entries(base.applied)) {
+    const file = byName.get(name);
+    if (!file || file.parse.lines < position.lines) return name;
+  }
+  return null;
+}
+
+/**
  * Brings `base` (state.json, or null when missing) up to date with the history files (sorted by
  * year). Positions are line numbers plus the eventId on that line, never timestamps. When they do
  * not match (the files changed elsewhere), all history is replayed from an empty state. Events whose
@@ -214,6 +228,6 @@ export function replayHistory(base: KiokuStateV1 | null, files: readonly History
   }
   // "今日だけ あと N 枚" lives only in state.json; keep it for the same day across a full replay.
   if (full && base?.today && draft.today?.day === base.today.day) draft.today = { ...draft.today, extraNew: base.today.extraNew };
-  else if (full && base?.today && !draft.today) draft.today = base.today;
+  else if (full && base?.today && (!draft.today || base.today.day > draft.today.day)) draft.today = base.today;
   return { state: { schemaVersion: 1, cards: draft.cards, today: draft.today, applied: draft.applied }, fullReplay: full && base !== null, applied };
 }

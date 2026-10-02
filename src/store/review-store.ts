@@ -3,10 +3,11 @@
 // (not even the folder) until the first rating or an explicit user action.
 import { errorMessage } from '../cards/error-message';
 import type { KiokuDay, KiokuStateV1, ReviewEvent } from '../review/types';
-import { STORE_REASONS, fileUnreadable, folderChangeRefused, historyCorrupt, historyTruncated, historyUnknownVersion, saveFailed,
+import { STORE_REASONS, fileUnreadable, folderChangeRefused, historyCorrupt, historyMissing, invalidEvent, historyTruncated, historyUnknownVersion, saveFailed,
   stateUnknownSchema, stateUnreadable } from './reasons';
 import { HISTORY_FILE, STATE_BACKUP_FILE, STATE_FILE, brokenFileName, historyFileName, parseHistory, parseState,
-  replayHistory, serializeEvent, serializeState, type HistoryFile, type HistoryParse } from './schema';
+  missingAppliedHistory, replayHistory, serializeEvent, serializeState, validateEvent, type HistoryFile,
+  type HistoryParse } from './schema';
 
 /** The subset of Obsidian's public `DataAdapter` that Kioku uses (paths are vault-relative). */
 export interface StoreAdapter {
@@ -115,6 +116,8 @@ export class ReviewStore {
       }
     }
     const files: HistoryFile[] = [...history].map(([name, parse]) => ({ name, parse }));
+    const missing = base ? missingAppliedHistory(base, files) : null;
+    if (missing) problems.push({ kind: 'read-only', message: historyMissing(`${folder}/${missing}`) });
     // With problems the replay is only used for display (counts); nothing is written in that mode.
     const { state } = replayHistory(base, files);
     // A truncated tail is repairable only when it is the only problem.
@@ -129,6 +132,8 @@ export class ReviewStore {
    */
   async record(event: ReviewEvent): Promise<RecordResult> {
     if (this.problem) return { ok: false, reason: this.problem.kind === 'truncated' ? this.problem.message : STORE_REASONS.readOnly };
+    // Never append a line that replay would reject (it would make the history read-only).
+    if (!validateEvent(JSON.parse(JSON.stringify(event)))) return { ok: false, reason: invalidEvent };
     const name = historyFileName(event.day);
     const path = this.path(name);
     try {
@@ -136,7 +141,9 @@ export class ReviewStore {
       const exists = await this.adapter.exists(path);
       const before = exists ? await this.adapter.read(path) : '';
       const current = parseHistory(before);
-      const problem = historyProblem(path, current);
+      const applied = this.state.applied[name];
+      const problem = historyProblem(path, current)
+        ?? (applied && current.lines < applied.lines ? { kind: 'read-only' as const, message: historyMissing(path) } : null);
       if (problem) {
         this.problem = problem;
         return { ok: false, reason: problem.message };

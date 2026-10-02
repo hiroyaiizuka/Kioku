@@ -1,4 +1,5 @@
 import { PluginSettingTab, Setting, type App, type Plugin } from 'obsidian';
+import { errorMessage } from '../cards/error-message';
 import { normalizeTriggerTags } from '../decks/tags';
 import { MAX_NEW_PER_DAY, normalizeDataFolder, type SettingsStore } from '../store/settings';
 import { checkFolderChange } from '../store/review-store';
@@ -23,7 +24,16 @@ export class KiokuSettingTab extends PluginSettingTab {
 
   private async render(): Promise<void> {
     const generation = this.generation += 1;
-    const current = await this.settings.get();
+    let current;
+    try {
+      current = await this.settings.get();
+    } catch (error) {
+      if (generation !== this.generation) return;
+      this.containerEl.empty();
+      this.containerEl.createEl('p', { cls: 'kioku-settings-status',
+        text: `設定を読み込めませんでした（${errorMessage(error)}）。上書きしないよう変更できません。` });
+      return;
+    }
     if (generation !== this.generation) return;
     const { containerEl } = this;
     containerEl.empty();

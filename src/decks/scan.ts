@@ -3,6 +3,7 @@ import { splitLines } from '../cards/lines';
 import { CARD_ID_PREFIX, extractCandidates } from '../cards/parser';
 import { classifyLines } from '../cards/regions';
 import { errorMessage } from '../cards/error-message';
+import { isCardId } from '../store/schema';
 import type { NoteCards } from './index';
 import { deckTagsOfNote, matchesTrigger } from './tags';
 
@@ -11,6 +12,8 @@ export interface ScanResult {
   /** Notes that could not be read (path and reason). */
   readonly unreadable: readonly { readonly path: string; readonly reason: string }[];
   readonly scannedNotes: number;
+  /** `^kioku-…` block IDs that are not valid card IDs (e.g. `^kioku-`); never presented. */
+  readonly invalidIds: readonly { readonly path: string; readonly id: string }[];
 }
 
 /**
@@ -23,6 +26,7 @@ export interface ScanResult {
 export async function scanVault(app: App, triggers: readonly string[]): Promise<ScanResult> {
   const notes: NoteCards[] = [];
   const unreadable: { path: string; reason: string }[] = [];
+  const invalidIds: { path: string; id: string }[] = [];
   let scannedNotes = 0;
   for (const file of app.vault.getMarkdownFiles()) {
     const cache = app.metadataCache.getFileCache(file);
@@ -42,10 +46,12 @@ export async function scanVault(app: App, triggers: readonly string[]): Promise<
     }
     const kinds = classifyLines(splitLines(text));
     const deckTags = deckTagsOfNote(frontmatterTags, bodyTags, (line) => (kinds[line] ?? null) !== null, triggers);
-    const cards = extractCandidates(text)
-      .filter((item) => item.cardId !== null && (item.status === 'adopted' || item.status === 'duplicate-id'))
+    const adopted = extractCandidates(text)
+      .filter((item) => item.cardId !== null && (item.status === 'adopted' || item.status === 'duplicate-id'));
+    for (const item of adopted) if (!isCardId(item.cardId)) invalidIds.push({ path: file.path, id: item.cardId ?? '' });
+    const cards = adopted.filter((item) => isCardId(item.cardId))
       .map((item) => ({ id: item.cardId ?? '', ...(item.edit ?? { question: item.question, answer: item.answer }) }));
     if (cards.length) notes.push({ path: file.path, deckTags, cards });
   }
-  return { notes, unreadable, scannedNotes };
+  return { notes, unreadable, scannedNotes, invalidIds };
 }

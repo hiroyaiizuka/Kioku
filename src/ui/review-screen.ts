@@ -1,5 +1,6 @@
 import { Component, MarkdownRenderer, Notice, type App } from 'obsidian';
 import { errorMessage } from '../cards/error-message';
+import { kiokuDay } from '../review/day';
 import { createReviewEvent } from '../review/event';
 import { ReviewQueue, newAllowance, type ReviewCard } from '../review/queue';
 import { intervalLabel, previewIntervals } from '../review/scheduler';
@@ -23,9 +24,10 @@ export interface ReviewContext {
 
 const GRADE_LABEL: Record<Grade, string> = { 1: 'もう一度', 2: '難しい', 3: '普通', 4: '簡単' };
 const EXTRA_NEW = [10, 20] as const;
+const DAY_CHANGED = 'Kioku：日付が変わったため、評価せずにデッキ選択を読み直しました。';
 
-/** `![[…]]` embeds are shown as plain links until the answer is revealed (they may show the answer). */
-export const hideEmbeds = (markdown: string): string => markdown.replace(/!\[\[/g, '[[');
+/** `![[…]]` and `![…](…)` embeds are shown as plain links until the answer is revealed (they may show the answer). */
+export const hideEmbeds = (markdown: string): string => markdown.replace(/!\[\[/g, '[[').replace(/!\[([^\]\n]*)\]\(/g, '[$1](');
 
 type Phase = 'question' | 'answer' | 'saving' | 'failed' | 'done';
 type Action = () => void;
@@ -132,12 +134,19 @@ export class ReviewScreen {
   private async rate(grade: Grade): Promise<void> {
     const card = this.current;
     if (this.phase !== 'answer' || !card || this.ctx.store.readOnly) return;
+    const now = this.ctx.now();
+    if (kiokuDay(now, this.ctx.settings.dayStartHour) !== this.ctx.today) {
+      // The queue, limits and previews belong to the session's day; start over for the new day.
+      new Notice(DAY_CHANGED);
+      this.ctx.backToPicker();
+      return;
+    }
     this.phase = 'saving';
     this.failure = '';
     this.render();
     try {
       this.pending = await createReviewEvent({ cardId: card.id, card, before: this.ctx.store.state.cards[card.id] ?? null,
-        grade, now: this.ctx.now(), dayStartHour: this.ctx.settings.dayStartHour });
+        grade, now, dayStartHour: this.ctx.settings.dayStartHour });
     } catch (error) {
       this.fail(saveFailed(errorMessage(error)));
       return;
@@ -247,8 +256,9 @@ export class ReviewScreen {
       focus = this.button(actions, 'もう一度保存する', 'mod-cta kioku-review-retry', () => void this.save());
     }
     const footer = screen.createDiv({ cls: 'kioku-review-footer' });
-    this.button(footer, 'ノートを開く', 'kioku-review-open', () => this.ctx.openNote(card), this.phase === 'saving');
-    this.button(footer, 'デッキ選択に戻る', 'kioku-review-back', () => this.ctx.backToPicker(), this.phase === 'saving');
+    // After a failed save only "もう一度保存する" (same event) or closing remains: leaving silently could lose it.
+    this.button(footer, 'ノートを開く', 'kioku-review-open', () => this.ctx.openNote(card), busy);
+    this.button(footer, 'デッキ選択に戻る', 'kioku-review-back', () => this.ctx.backToPicker(), busy);
     (focus ?? screen).focus();
   }
 

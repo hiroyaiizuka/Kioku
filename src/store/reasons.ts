@@ -22,6 +22,9 @@ export const historyTruncated = (path: string, line: number): string =>
   `記録ファイル ${path} の最終行（${line} 行目）が途中で切れています。読み取り専用にしています。`;
 export const fileUnreadable = (path: string, detail: string): string =>
   `${path} を読めません（${detail}）。読み取り専用にしています。`;
+export const historyMissing = (path: string): string =>
+  `記録ファイル ${path} が見つからないか、日程ファイルが反映済みとしている行より短くなっています。日程を失わないよう読み取り専用にしています。README の復旧手順を参照してください。`;
+export const invalidEvent = '評価の記録を作れませんでした（カード ID が不正です）。';
 export const saveFailed = (detail: string): string => `記録ファイルに書き込めませんでした（${detail}）。`;
 
 export const ratingNotSaved = (reason: string): string => `評価を保存できませんでした：${reason}`;

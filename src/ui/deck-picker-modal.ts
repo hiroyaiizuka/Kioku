@@ -146,6 +146,9 @@ export class DeckPickerModal extends Modal {
       notes.createEl('p', { cls: 'kioku-deck-conflict',
         text: `内容の異なる同じ ID（${conflict.id}）のため出題しません：${conflict.paths.join(' / ')}` });
     }
+    for (const invalid of scan.invalidIds) {
+      notes.createEl('p', { cls: 'kioku-deck-invalid-id', text: `カード ID として使えない ID（^${invalid.id}）のため出題しません：${invalid.path}` });
+    }
     for (const failed of scan.unreadable) {
       notes.createEl('p', { cls: 'kioku-deck-unreadable', text: `読めなかったノート：${failed.path}（${failed.reason}）` });
     }
