@@ -1,6 +1,6 @@
 # Kioku の開発
 
-Node.js は `.nvmrc` の **22.22.3** を使う。tooling の direct dependency は exact stable version で lock し、runtime dependency は M0 ではゼロ。
+Node.js は `.nvmrc` の **22.22.3** を使う。tooling の direct dependency は exact stable version で lock する。runtime dependency は M2 から ts-fsrs 5.4.2 の1つだけ（exact pin、`main.js` に bundle、MIT 表示を `main.js` 先頭に保持）。版を上げるときは `scripts/lib/build.mjs` の `runtimeDependencies`、`src/review/scheduler.ts` の `SCHEDULER_ID`、FSRS の単体テスト（間隔）を同時に見直し、記録に残す。
 
 ```sh
 nvm use

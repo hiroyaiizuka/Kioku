@@ -1,6 +1,6 @@
 # M2（LEV-276）設計：タグデッキ・復習・日程と履歴
 
-> **状態：設計確定（2026-10-02 利用者決定）・実装前。** この文書は LEV-276 の「設計時に確定」項目について利用者が決めた内容と、その実装方針をまとめたもの。**M2 は未実装**であり、デッキ・復習・日程・履歴が動くことを意味しない。実機での確認が終わるまで実装済みとは扱わない。
+> **状態：設計確定（2026-10-02 利用者決定）・実装済み（実機確認前）。** この文書は LEV-276 の「設計時に確定」項目について利用者が決めた内容と、その実装方針をまとめたもの。実装時に確定・変更した点は末尾の §12 にまとめた。**専用 Vault での実機確認（§9、`docs/harness.md`）はまだで、実機でデッキ・復習・日程・履歴が動くことは確認していない。**
 >
 > 前提：main の M1（LEV-275、4be240d）。採用済みカードは Q/A ブロック最終行末の ` ^kioku-<[0-9a-z]10文字>`（ランダム ID）で識別し、ポップアップ編集時は直後の `%%kioku-edit:kioku-…` コメントが有効な問い/答えになる（`docs/architecture.md`「保存形式と安定 ID」）。M1 のノート書き込みは採用時だけで、Canvas ガード・ディスク確認（3 秒 settle / 6 秒 deadline）・1回だけの回復（最長 12 秒）を通る。M2 はノートを書かない。
 >
@@ -270,3 +270,21 @@ export interface KiokuSettingsV1 {   // .obsidian/plugins/kioku/data.json (setti
 - 大規模 Vault の走査時間と `blocks` による絞り込みの漏れ。
 - `MarkdownRenderer` の副作用。
 - ribbon 変更に伴う smoke 更新漏れで build 識別の検査が効かなくなる。
+
+## 12. 実装時に確定・変更した点（LEV-276 実装）
+
+設計の決定事項（§1）は変えていない。§2・§6・§7 の【未検証】や「実装時に確定」とした点を次のように決めた。実機での確認は §9 のチェックリストで行う。
+
+| 項目 | 実装 | 理由 |
+| --- | --- | --- |
+| `Kioku/` の I/O | Vault API（`createFolder`/`process`/`append`）ではなく公開 `DataAdapter`（`app.vault.adapter` の `exists`/`read`/`write`/`append`/`mkdir`/`list`）だけを使う。 | 「存在しない」と「読めない」の区別（§7.3）を、起動直後に遅れうる Vault の索引ではなくディスクの `exists` で行うため（索引の遅れで既存ファイルを新規と誤認して上書きする経路を作らない）。`.json`/`.jsonl` が `TFile` になるか（§2【未検証】）に依存せず、経路を1つにして単体テストで固定できる。対象ファイルはエディタで開かれないため、`Vault.process` の利点（エディタのバッファとの整合）は不要。 |
+| `ReviewEvent` の項目 | §6 のスケッチに評価後の `phase`・`dueDay`・`reps`・`lapses` を追加（`stability`・`difficulty` は既存）。 | 再生がスケジューラを再実行せずイベントだけで日程を復元でき、ts-fsrs の版が変わっても過去の日程が変わらない。`state.json` が無くても履歴だけで完全に再構築できる。 |
+| `today.newIntroduced` | 評価のたびに状態へ加算するのではなく、履歴の再生で `phaseBefore === 'new'` のイベントを日ごとに数える（`state.json` を消しても数え直せる）。`extraNew` は `state.json` だけにあり、全再生でも同じ日なら引き継ぐ。 | 履歴が正本という規則（§7.2）に合わせる。 |
+| ts-fsrs の副作用 | ts-fsrs 5.4.2 はモジュール評価時に `Date.prototype` に `scheduler`/`diff`/`format`/`dueFormat` を代入する。`src/review/fsrs-guard.ts` で import 前の状態を記録し、import 直後に元に戻す。 | Obsidian の共有 window と他プラグインを汚さないため（ts-fsrs 自身はそれらを使わない）。単体テストと production bundle の検査で固定。 |
+| 同日内の再出題なし | ts-fsrs の期日の UTC 日付が評価日以前なら翌日に切り上げる（`enable_short_term=false` では通常起きない安全策）。 | §4.1 の「同日内の再出題なし」を設定に依存させない。 |
+| キー入力 | `Modal.scope.register` ではなく、modal の `containerEl` の capture 段 `keydown` で1経路に処理し `preventDefault`。Space/Enter の `keyup` も抑止し、ボタンの click は描画ごとの token で古いボタンを無視。 | `Scope` で Space をどのキー名で登録すべきかが公開 API の記述からは確定できず、`event.repeat`・`isComposing` を直接見られる DOM の経路の方が単体テストで二重評価の防止を固定できる。`Escape` は従来どおり Modal に任せる（§9 の 13 で実機確認）。 |
+| 走査の絞り込み | トリガータグのあるノートは `cache.blocks` に関係なくすべて読む。`kioku-` の block キーだけを持つノートはデッキ外の件数のためだけに読む。 | 箇条書き項目の ID が `cache.blocks` に入るか（§2【未検証】）を確かめるまで、デッキに入るべきカードを取りこぼさない側に倒す（§3.3 の代替案）。性能は §9 の 15 で計測する。 |
+| 復習画面のファイル名 | §8 の `review-modal.ts` は `src/ui/review-screen.ts`（同じ modal 内の画面）。 | §5 のとおり復習はデッキ選択と同じ modal 内で行い、別の `Modal` ではないため。 |
+| 設定の読み込み | `data.json` は `onload` では読まず、デッキ選択・設定タブで初めて必要になったときに読む。 | 起動時に何も読み書きしない規則（M0 から）を保つ。 |
+| `dataFolder` の変更 | 設定タブではテキスト欄に入力して「変更」ボタンで適用（入力のたびには適用しない）。使えない名前（空、`.` で始まる、`..` を含む等）は拒否。 | 1文字ごとに変更ガードが走って誤って拒否・適用しないため。 |
+| `obsidianmd/settings-tab/prefer-setting-definitions` | eslint 設定でこの規則だけを無効化。 | 宣言的設定 API は Obsidian 1.13.0 からで、Kioku の `minAppVersion`（1.8.7）の API 型に無い。 |
