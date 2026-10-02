@@ -9,12 +9,15 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { acquire, defaultQueueDir, defaultSystem, formatDuration, HeavyQueueError, listTickets, openQueue, overdueMs, readOwner, release,
   run, status, tokenVariable } from '../../scripts/heavy-queue/heavy-queue.mjs';
 import { assertNativeHeld, heavyQueueEnabled, launchWithQueue, quitWithQueue } from '../../scripts/lib/heavy-queue.mjs';
+import { prepareVault } from '../../scripts/lib/harness.mjs';
+import { cleanup, createFixture } from '../helpers/fixture.mjs';
 
 const project = fileURLToPath(new URL('../../', import.meta.url));
 const library = join(project, 'scripts', 'heavy-queue', 'heavy-queue.mjs');
 const cli = join(project, 'scripts', 'heavy-queue', 'cli.mjs');
-const temporary = [];
+const temporary = []; const fixtures = [];
 afterEach(() => {
+  while (fixtures.length) cleanup(fixtures.pop());
   while (temporary.length) { const dir = temporary.pop(); chmodSync(dir, 0o700); rmSync(dir, { recursive: true, force: true }); }
 });
 function scratch() { const dir = mkdtempSync(join(tmpdir(), 'kioku-heavy-queue-')); temporary.push(dir); return dir; }
@@ -365,6 +368,40 @@ describe('Kioku wiring (opt-in)', () => {
     expect(recorded).toEqual({ argv: ['run', 'check:steps'], token: null });
     expect(existsSync(queueDir)).toBe(false);
   });
+
+  it('opt-out: check:steps is the pre-LEV-305 check chain, and its exit code and output bytes pass through unchanged', () => {
+    // Pre-change `check` (7aac9c8). The only console difference is npm's own heading pair for the extra `check:steps` hop.
+    expect(JSON.parse(readFileSync(join(project, 'package.json'), 'utf8')).scripts['check:steps'])
+      .toBe('npm run validate && npm run lint && npm run typecheck && npm test && npm run build && npm run package');
+    for (const code of [0, 1, 2, 3, 127]) {
+      const recorder = join(scratch(), 'fake-npm.mjs'); const queueDir = join(scratch(), 'queue');
+      writeFileSync(recorder, `process.stdout.write('out\\u00e9\\n'); process.stderr.write('err ${code}\\n'); process.exit(${code});\n`);
+      const env = { ...process.env, npm_execpath: recorder, ORCA_HEAVY_QUEUE_DIR: queueDir };
+      delete env.KIOKU_HEAVY_QUEUE; delete env[tokenVariable];
+      const result = spawnSync(process.execPath, ['scripts/check.mjs'], { cwd: project, env });
+      expect(result.status).toBe(code);
+      expect(result.stdout.toString('utf8')).toBe('outé\n'); expect(result.stderr.toString('utf8')).toBe(`err ${code}\n`);
+      expect(existsSync(queueDir)).toBe(false);
+    }
+  });
+
+  it('opt-out: smoke records keep the pre-change schema and quit is unchanged; no queue directory is created', () => {
+    const root = createFixture(); fixtures.push(root); prepareVault(root);
+    const queueDir = join(scratch(), 'queue');
+    const env = { ...process.env, ORCA_HEAVY_QUEUE_DIR: queueDir, KIOKU_CDP_PORT: '9', KIOKU_QUIT_TIMEOUT_MS: '1000' };
+    delete env.KIOKU_HEAVY_QUEUE; delete env.KIOKU_BASELINE_ID; delete env.KIOKU_CDP_URL; delete env[tokenVariable];
+    const smoke = spawnSync(process.execPath, ['scripts/e2e/smoke.mjs'], { cwd: root, encoding: 'utf8', env });
+    expect(smoke.status).toBe(1);
+    const runs = readdirSync(join(root, 'artifacts', 'e2e-smoke'));
+    expect(runs).toHaveLength(1);
+    const record = JSON.parse(readFileSync(join(root, 'artifacts', 'e2e-smoke', runs[0], 'record.json'), 'utf8'));
+    expect(Object.keys(record)).toEqual(['status', 'kind', 'startedAt', 'steps', 'restart', 'preflight', 'error', 'finishedAt']);
+    expect(record).toMatchObject({ status: 'FAIL', kind: 'native-obsidian-cdp', steps: [] });
+    const quit = spawnSync(process.execPath, ['scripts/obsidian-instance-cli.mjs', 'quit'], { cwd: root, encoding: 'utf8', env });
+    expect(quit.status, quit.stderr).toBe(0);
+    expect(JSON.parse(quit.stdout)).toEqual({ status: 'NOT_RUNNING', message: 'No recorded dedicated instance; nothing was signalled.' });
+    expect(existsSync(queueDir)).toBe(false);
+  }, 60000);
 
   it('npm run check with KIOKU_HEAVY_QUEUE=1 runs the same steps inside the slot and releases it', () => {
     const { result, queueDir, recorded } = checkEntry({ KIOKU_HEAVY_QUEUE: '1' });

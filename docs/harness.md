@@ -59,7 +59,9 @@ test-vault を利用者の通常 Obsidian で開かない（利用者 profile �
 
 ## Mac 全体の重いジョブ順番待ち（LEV-305 pilot、opt-in）
 
-`KIOKU_HEAVY_QUEUE=1` のときだけ有効。未設定（空、`0` も同じ）なら `npm run check` は `npm run check:steps`（従来と同じ手順）を実行するだけで、キューのディレクトリにも触れない（違いは npm が出す見出し行だけ）。`1` 以外の値は拒否する。
+`KIOKU_HEAVY_QUEUE=1` のときだけ有効。`1` 以外の値は拒否する。未設定（空や `0` も同じ）なら `npm run check` は `npm run check:steps`（LEV-305 前の check と同じ手順）を実行するだけで、キューのディレクトリにも触れない。
+
+opt-out のときに同じであることを保証するのは、各手順の終了コードと生成物（`dist/`、build-info、package 検査、harness:prepare/update が書く test-vault の plugin ファイル、smoke 記録の項目）である。コンソールに出る文字列は対象外で、`npm run check` には npm が出す見出し（`> kioku@… check` と `> node scripts/check.mjs`）が 1 組増える。`package.json` は build の入力なので、build ID（とそれを含む `main.js`・build-info）は、`package.json` を変える他の変更と同じく変わる。同じ入力なら、変更前のコードとバイト単位で一致する（単体テストと `artifacts/lev-305/opt-out/` の比較記録）。
 
 - 本体は `scripts/heavy-queue/`（`node:*` だけを使う tooling。プラグインの runtime には含めない）。ほかの project も `node <path>/scripts/heavy-queue/cli.mjs run --project <名前> --job check|native -- <command>`、`... status`（読むだけ）で使える。
 - 置き場所: `ORCA_HEAVY_QUEUE_DIR`（正規化済み絶対 path）、既定は `~/Library/Caches/orca-heavy-queue/`（macOS 以外は `~/.cache/orca-heavy-queue/`）。mode 0700、本人 uid、group/other 書き込み不可でなければ拒否する。git 管理外で、使っていないときは消してよい。
