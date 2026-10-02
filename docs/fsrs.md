@@ -20,8 +20,9 @@ FSRS は評価（もう一度 / 難しい / 普通 / 簡単）のたびにこの
 
 SM-2 は古くから使われている方式で、Anki の従来方式や Obsidian の Spaced Repetition プラグインの既定方式（SM-2-OSR）の元になっています。Kioku は次の理由で FSRS を選びました。
 
-- **同じ記憶率なら復習が少なくて済む**：FSRS の開発者によるシミュレーションでは、同じ記憶率を保つのに SM-2 より **20〜30% 少ない復習**で済むとされています（[ABC of FSRS](https://github.com/open-spaced-repetition/awesome-fsrs/wiki/ABC-of-FSRS)）。Anki のマニュアルも「どれだけ忘れそうかをより正確に見積もることで、同じ時間でより多くを覚えられる」と説明しています（[Anki Deck Options](https://docs.ankiweb.net/deck-options.html)）。
-- **記憶の予測が正確**：約 1 万人の Anki 利用者の約 7 億 2700 万件の復習記録を使ったベンチマーク（[srs-benchmark](https://github.com/open-spaced-repetition/srs-benchmark)）で、FSRS-6 は Anki の SM-2 より予測誤差（log loss）が小さい利用者が **99.6%** でした（[Benchmark of spaced repetition algorithms](https://expertium.github.io/Benchmark.html)）。
+- **同じ記憶率なら復習が少なくて済む**：FSRS プロジェクトの解説（ABC of FSRS、awesome-fsrs wiki）によるシミュレーションでは、同じ記憶率を保つのに SM-2 より **20〜30% 少ない復習**で済むとされています（[ABC of FSRS](https://github.com/open-spaced-repetition/awesome-fsrs/wiki/ABC-of-FSRS)）。Anki のマニュアルも「どれだけ忘れそうかをより正確に見積もることで、同じ時間でより多くを覚えられる」と説明しています（[Anki Deck Options](https://docs.ankiweb.net/deck-options.html)）。
+- **記憶の予測が正確**：約 1 万人の Anki 利用者による約 7.27 億件のデータセット（評価には 9,999 コレクション・約 3.5 億件を使用）のベンチマーク（[srs-benchmark](https://github.com/open-spaced-repetition/srs-benchmark)）で、**利用者ごとにパラメータを最適化した** FSRS-6（recency）は、Anki の SM-2 より予測誤差（log loss）が小さい利用者が **99.6%** でした（[Benchmark of spaced repetition algorithms](https://expertium.github.io/Benchmark.html)）。
+  - Kioku の M2 は最適化せず**標準パラメータ**を使います。標準パラメータの FSRS-6 は最適化した FSRS-6 より誤差が大きいものの、Anki の SM-2 よりは小さいと報告されています（log loss：FSRS-6 標準 0.3468、最適化 0.3215、Anki-SM-2 0.490。[srs-benchmark README、2025 年 5 月版 commit 2e1a76a](https://github.com/open-spaced-repetition/srs-benchmark/blob/2e1a76a/README.md)）。
 - **復習が遅れても破綻しにくい**：予定より遅れて復習した場合の扱いも SM-2 より良いとされています（[ABC of FSRS](https://github.com/open-spaced-repetition/awesome-fsrs/wiki/ABC-of-FSRS)）。
 - **他のツールも採用を進めている**：Anki では FSRS を選んで有効にでき（既定は従来方式）、Obsidian の Spaced Repetition プラグインも 1.15.0（2026-05-24）で FSRS を選択式で追加しました（[SR 1.15.0](https://github.com/st3v3nmw/obsidian-spaced-repetition/releases/tag/1.15.0)）。
 - **実装が軽く、ライセンスが明確**：Kioku は FSRS の開発プロジェクト open-spaced-repetition による TypeScript 実装 ts-fsrs 5.4.2（MIT、他の依存なし、FSRS-6）を使います。ブラウザ向けに圧縮して約 21 KB（gzip 約 7 KB）で、Obsidian の中だけで動きます（Kioku 開発時の実測）。

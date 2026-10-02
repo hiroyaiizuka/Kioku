@@ -31,7 +31,7 @@
 | 事実 | 出典 |
 | --- | --- |
 | SR の既定トリガータグは `#flashcards` で、入れ子タグにも一致する。親デッキを選ぶと子デッキを含む。 | [SR Decks](https://www.stephenmwangi.com/obsidian-spaced-repetition/flashcards/decks/), [SR Reviewing](https://stephenmwangi.com/obsidian-spaced-repetition/flashcards/reviewing/) |
-| SR はスケジュールをノート内の HTML コメント `<!--SR:!2024-08-16,51,230-->` で保存する。単一ファイルへの保存は「計画中」のまま。 | [SR Data Storage](https://stephenmwangi.com/obsidian-spaced-repetition/data-storage/) |
+| SR はスケジュールをノート内の HTML コメント `<!--SR:!2024-08-16,51,230-->` で保存する。単一ファイルへの保存は「計画中」のまま。開発者向け README では、別の保存先の試作について「it never really worked out」と書かれ、`StorageType` の有効な値は `NOTES` だけ（`FOLDER`・`PLUGIN_DATA` はコメントアウト）。 | [SR Data Storage](https://stephenmwangi.com/obsidian-spaced-repetition/data-storage/), [data-store/README.md](https://github.com/st3v3nmw/obsidian-spaced-repetition/blob/main/src/data/data-store/README.md)（5 行目）, [data-store/base/data-store.ts](https://github.com/st3v3nmw/obsidian-spaced-repetition/blob/main/src/data/data-store/base/data-store.ts) |
 | SR 1.15.0（2026-05-24）で FSRS が opt-in として追加された。既定は従来の SM-2-OSR のまま（「バグが潜んでいるかもしれないので既定では有効にしない」）。 | [SR 1.15.0 release](https://github.com/st3v3nmw/obsidian-spaced-repetition/releases/tag/1.15.0), [SR Changelog](https://stephenmwangi.com/obsidian-spaced-repetition/changelog/) |
 | SR には1日の新規カード上限の設定がない（要望 #174・#505 が open）。 | [#174](https://github.com/st3v3nmw/obsidian-spaced-repetition/issues/174), [#505](https://github.com/st3v3nmw/obsidian-spaced-repetition/issues/505) |
 | Anki では FSRS は opt-in。目標保持率の既定は 90%。「Next day starts at」の既定は 4AM。新規カードの既定は1日 20 枚。 | [Anki Deck Options](https://docs.ankiweb.net/deck-options.html), [Anki Preferences](https://docs.ankiweb.net/preferences.html), [Anki FAQ](https://faqs.ankiweb.net/anki-is-not-showing-me-all-my-cards.html) |
@@ -48,7 +48,7 @@
 ### 3.1 トリガータグとデッキツリー
 
 - 設定 `triggerTags`（既定 `["kioku"]`）。ノートのタグ `t` は、あるトリガー `g` について `t == g` または `t` が `g/` で始まるとき（大文字小文字を区別しない）デッキに入る。`#kiokux` は一致しない。
-- デッキのパスはタグそのもの（`#kioku/医学/生理` → kioku › 医学 › 生理）。トリガーごとに最上位デッキが1つでき、子タグが子デッキになる。表示名は最初に見つかった表記。
+- デッキのパスはタグそのもの（`#kioku/医学/生理` → kioku › 医学 › 生理）。トリガーごとに最上位デッキが1つでき、子タグが子デッキになる。表示名は最初に見つかった表記。UI の細部として、トリガータグが**1つだけ**設定されているときは表示からその根を省く（「医学 › 生理」。根のデッキ自体は「全デッキ」と同じ内容になる）。複数設定されているときは根を表示する（「kioku › 医学 › 生理」）。
 - 親デッキは子孫のカードを含む（件数はカード ID で重複を除いた数）。最上位に「全デッキ」（全トリガーデッキの和集合）。
 - タグの取得：frontmatter は `parseFrontMatterTags(cache.frontmatter)`、本文は `cache.tags`（位置付き）のうち、位置が M1 の除外領域（コード、`%%`、HTML コメント、`$$`、Excalidraw 描画部）に入らないもの。タグの文法は自前で実装しない。
 - 適用範囲はノート全体：そのノートの採用済みカードすべてが、ノートのすべてのデッキタグのデッキに入る。
@@ -133,6 +133,7 @@ export interface CardSchedule {
 /** One rating, appended to Kioku/history-YYYY.jsonl. Skip is never recorded. */
 export interface ReviewEvent {
   readonly v: 1;
+  readonly eventId: string;         // `${cardId}:${random 10 chars}`, unique; replay dedupes on it
   readonly cardId: CardId;
   readonly at: number;              // real time, UTC epoch ms
   readonly day: KiokuDay;
@@ -150,7 +151,8 @@ export interface KiokuStateV1 {      // Kioku/state.json
   readonly schemaVersion: 1;
   readonly cards: Readonly<Record<CardId, CardSchedule>>;
   readonly today: { readonly day: KiokuDay; readonly newIntroduced: number; readonly extraNew: number } | null;
-  readonly lastEventAt: number | null; // `at` of the last history event reflected in `cards`
+  /** Replay position per history file: lines already reflected in `cards` and the eventId on the last of them. */
+  readonly applied: Readonly<Record<string, { readonly lines: number; readonly lastEventId: string }>>;
 }
 
 export interface KiokuSettingsV1 {   // .obsidian/plugins/kioku/data.json (settings only)
@@ -179,14 +181,18 @@ export interface KiokuSettingsV1 {   // .obsidian/plugins/kioku/data.json (setti
 - Markdown ではないので、Obsidian のエディタ・Canvas・ホバー popover が開いて古いバッファで上書きする経路（M1 で実機確認した問題）を通らない。対応形式外なので検索・グラフにも出ない見込み（【未検証】。「すべての拡張子を検出」設定時のファイル一覧表示を含め実機で確認）。
 - プラグインのアンインストールで消えない。Vault ごとバックアップされる。
 - Q6 により複数端末の同期は想定しない（Obsidian Sync では既定で同期されない）。
-- `dataFolder` を変えてもファイルは移動しない。設定画面で「既存のデータは移動されません」と表示し、移動は利用者が行う。
+- `dataFolder` を変えてもファイルは移動しない（移動は利用者が行う）。変更を適用する前に新旧フォルダを調べ、**新しいフォルダにデータが無く古いフォルダにデータがある場合は変更を適用せず**、「古いフォルダ（…）にデータがあります。移動してから変更してください」と表示する。黙って空の状態から始めることはしない。新しいフォルダに既にデータがある場合（利用者が移動済み）は適用する。
 
 ### 7.2 読み書きの規則
 
 - **読み込み**はデッキ選択を開いたとき（`onload` では読まない）。
 - **デッキ選択の開閉では何も作らない・書かない**。`Kioku/` フォルダとファイルは最初の評価で初めて作る。
-- 評価1件の保存順序：(1) 履歴 JSONL に1行追記 → (2) `state.json` を更新（セッション最初の更新の前に `.bak` を作る）→ (3) 読み戻して検証。完了を確認してから次のカードへ進む。失敗時は進めず理由を表示する。
-- (1) と (2) の間で止まっても、次の読み込みで `lastEventAt` より新しい履歴を再生して状態を追いつかせる。
+- **履歴が正本、状態はキャッシュ**。評価1件の保存：
+  1. 一意の `eventId`（`<cardId>:<ランダム10文字>`）を持つイベントを作り、履歴 JSONL に1行追記する。
+  2. 追記を読み戻して、その `eventId` の行が末尾にあることを確認する。**ここまで成功したら「保存済み」**として次のカードへ進む（メモリ上の状態は更新済みなので同じセッションで再出題しない）。
+  3. `state.json` を更新する（セッション最初の更新の前に `.bak` を作る）。失敗しても評価は失われていないので進行は止めず、「日程ファイルの更新に失敗しました。次に開いたときに記録から反映します」と1回表示する。
+- 1 が失敗または結果不明の場合は進めず理由を表示する。再試行は**同じ `eventId`** で行い、同じイベントが2行になっても再生時に重複除去されるので二重評価にならない。新しい評価として打ち直させない。
+- 読み込み時、`state.json` の `applied`（履歴ファイルごとの反映済み行数と最後の `eventId`）より後ろの行を再生して状態を追いつかせる。再生位置は**行数と `eventId` で決め、時刻（`at`）では決めない**（時計の巻き戻しや同じミリ秒の評価で取りこぼさないため）。`applied` の位置の行の `eventId` が一致しない（ファイルが外部で変わった）場合は、全履歴を先頭から再生し直す。
 - 書き込み API は Vault API（`createFolder`、`process`、`append`）を優先し、`.json`/`.jsonl` が `TFile` として扱えない場合だけ `DataAdapter` を使う（§2 の【未検証】）。
 - 理由文は M1 の `src/cards/reasons.ts` の方式（理由と前置きを分ける）に合わせて M2 用を追加する。
 
@@ -196,8 +202,9 @@ export interface KiokuSettingsV1 {   // .obsidian/plugins/kioku/data.json (setti
 | --- | --- |
 | 読めない・壊れた `state.json` を「新規」と誤認して上書き | ファイルが**存在しない**ときだけ新規扱い（存在確認は明示的に行う）。存在するのに読めない/検証に失敗したら**読み取り専用モード**：評価ボタンを無効化し理由を表示、何も書かない。 |
 | `state.json` が無いが履歴はある | 履歴を時刻順に再生して状態を再構築する（書き込みは最初の評価時）。 |
-| 履歴の壊れた行 | その行を飛ばさず読み取り専用にし、行番号を表示する（黙って欠落させない）。 |
-| 保存途中の失敗 | `.bak` と履歴再生で復元できる。復元手順を README に書く。 |
+| 履歴の最終行だけが途中で切れている（クラッシュ時の典型） | 自動では捨てない。読み取り専用にしたうえで確認ボタン「不完全な最終行を退避して続ける」を出し、押されたときだけその1行を `history-YYYY.jsonl.broken` に追記して履歴から取り除き、続行する（この行の評価は失われるので、その旨を表示する）。解決するまで追記しない（壊れた行に続けて書かないため）。 |
+| それ以外の履歴の壊れた行（途中の行、複数行） | 読み取り専用にし、ファイル名と行番号を表示する。自動修復しない。復旧手順（`.broken` への手動退避、`.bak` からの戻し方）は README に書く。 |
+| 保存途中の失敗 | 履歴の追記が確認できていれば評価は保存済みで、状態は次回の再生で追いつく。状態は `.bak` からも戻せる。復元手順を README に書く。 |
 | 未知の `schemaVersion`（古い Kioku で新しいデータを開く） | 読み取り専用。移行は新しい版だけが行う。 |
 | 誤操作でのフォルダ削除・移動 | M2 では防げない。README とデッキ選択の注記に、`Kioku/` に学習履歴があることを明記する。エクスポートは後続。 |
 
@@ -237,7 +244,9 @@ export interface KiokuSettingsV1 {   // .obsidian/plugins/kioku/data.json (setti
 9. 新規上限：21 枚目以降が「残りは明日以降」になり、「今日だけ あと10枚」で 10 枚追加される。
 10. 今日評価したカードが今日の Due に再び出ない（日付境界そのものは単体テストで固定）。
 11. ブロックの別ノートへの移動・改名後も日程が保持され、削除→Undo で戻る。原文編集後も保持。
-12. `state.json` を壊すと読み取り専用になり、評価できず上書きされない。`state.json` を消すと履歴から再構築される。
+12. `state.json` を壊すと読み取り専用になり、評価できず上書きされない。`state.json` を消すと履歴から再構築される。`state.json` を古い版に戻すと、反映済み位置より後ろの履歴が再生されて追いつく（重複行があっても二重に数えない）。
+12a. 履歴の最終行を途中で切ると読み取り専用になり、確認ボタンを押したときだけその行が `.broken` に移って続行できる。途中の行を壊すと読み取り専用のまま。
+12b. `dataFolder` を、データの無いフォルダ名へ変えようとすると適用されず「古いフォルダ（…）にデータがあります…」が表示される。
 13. キーボード：Space/Enter、`1`–`4`、`S`、Escape。フォーカス中の Space、長押し、保存中の連打で二重評価されない（履歴の行数で確認）。IME 確定の Enter で評価されない。
 14. 答え表示前に問いの埋め込みが描画されない。
 15. 性能：生成 fixture でデッキ選択を開くまでの時間を記録する。

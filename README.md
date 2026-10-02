@@ -44,6 +44,13 @@ A: 光エネルギーで糖を作る反応
 - FSRS とは何か、なぜ選んだか：[FSRS とは](docs/fsrs.md)
 - 設計の詳細：[M2 設計](docs/m2-design.md)
 
+M2 の実装後に学習記録を復旧するときの手順（予定）：
+
+1. Obsidian を閉じ、`Kioku/` フォルダごとコピーしてから作業します。
+2. 日程ファイル `state.json` が壊れたときは、`state.json.bak` を `state.json` に戻すか、`state.json` を削除します。次に開いたとき、評価の記録（`history-<年>.jsonl`）から日程が作り直されます。
+3. 評価の記録の最後の1行だけが途中で切れているときは、Kioku が表示する確認ボタンで、その行を `history-<年>.jsonl.broken` に退避して続けられます。
+4. それ以外の行が壊れているときは、Kioku は書き込みを止めて行番号を表示します。その行をテキストエディタで `history-<年>.jsonl.broken` に移してから、Obsidian を開き直してください。
+
 ## 開発ビルドを専用 Vault で確認する
 
 一般利用者向け Release はまだありません。開発者は Node.js 22.22.3 で `npm ci`、`npm run check`、初回だけ `npm run harness:prepare` を実行し、プロジェクト内の `test-vault/` を Obsidian で別 Vault として開きます。既存 Vault へ自動導入しないでください。詳しくは [開発手順](docs/development.md) と [ハーネス](docs/harness.md) を参照してください。
