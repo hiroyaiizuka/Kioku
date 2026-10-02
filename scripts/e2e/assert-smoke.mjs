@@ -54,3 +54,26 @@ export function modalObservation(selector, identitySelector) {
     + `buildId:b?.dataset.kiokuBuildId,version:b?.dataset.kiokuVersion,x:r?.x??0,y:r?.y??0,width:r?.width??0,height:r?.height??0,`
     + `viewportWidth:innerWidth,viewportHeight:innerHeight}})())`;
 }
+
+/** Root classes of Kioku's own modals (the review screen renders inside the deck picker modal). */
+export const kiokuModalClasses = ['kioku-startup-modal', 'kioku-deck-picker-modal', 'kioku-candidate-modal'];
+
+/**
+ * Every open modal container; Kioku's own modal is recognised only by a scoped class on the modal element inside the container.
+ * `modalInventoryArrayExpression` evaluates to an ARRAY (for embedding inside another JSON.stringify(...));
+ * `modalInventoryExpression` evaluates to its JSON STRING (for CDP.value, which JSON.parses the returned string).
+ */
+export const modalInventoryArrayExpression = `[...document.querySelectorAll('.modal-container')].map((container) => {
+  const classes = [...(container.querySelector('.modal')?.classList ?? [])];
+  return { kioku: classes.some((name) => ${JSON.stringify(kiokuModalClasses)}.includes(name)), classes: classes.join(' ') };
+})`;
+export const modalInventoryExpression = `JSON.stringify(${modalInventoryArrayExpression})`;
+
+export function assertNoForeignModal(modals) {
+  if (!Array.isArray(modals)) throw new Error('Could not inspect open Obsidian modals.');
+  const foreign = modals.filter((modal) => !modal || modal.kioku !== true);
+  if (foreign.length) {
+    const names = foreign.map((modal) => modal?.classes || '(unknown)').join(', ');
+    throw new Error(`Unexpected foreign modal open (e.g. trust / restricted-mode dialog): ${names}`);
+  }
+}

@@ -18,6 +18,8 @@
     "harness:prepare": "npm run check && node scripts/harness-cli.mjs prepare",
     "harness:update": "npm run check && node scripts/harness-cli.mjs update",
     "harness:preflight": "node scripts/harness-cli.mjs preflight",
+    "harness:launch": "node scripts/obsidian-instance-cli.mjs launch",
+    "harness:quit": "node scripts/obsidian-instance-cli.mjs quit",
     "harness:e2e:smoke": "node scripts/e2e/smoke.mjs",
     "hooks:install": "node scripts/install-hooks.mjs"
   },

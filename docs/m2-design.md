@@ -240,7 +240,7 @@ export interface KiokuSettingsV1 {   // .obsidian/plugins/kioku/data.json (setti
 5. 評価で `history-YYYY.jsonl` に1行、`state.json` が更新、初回は `.bak` 作成。ノート bytes は不変。
 6. Skip で `Kioku/` とノートの bytes が変わらず、同セッションで再出題されず、開き直すと残っている。
 7. 途中で閉じる・Escape：評価済み分だけ保存。
-8. Obsidian を終了 → 再起動で期日と Due/New/Total が一致。`harness:update` 後も `Kioku/` が残る。
+8. `harness:quit` → `harness:launch` の再起動（`docs/harness.md`「M2 実機確認」）で期日と Due/New/Total が一致。`harness:update` 後も `Kioku/` が残る。
 9. 新規上限：21 枚目以降が「残りは明日以降」になり、「今日だけ あと10枚」で 10 枚追加される。
 10. 今日評価したカードが今日の Due に再び出ない（日付境界そのものは単体テストで固定）。
 11. ブロックの別ノートへの移動・改名後も日程が保持され、削除→Undo で戻る。原文編集後も保持。

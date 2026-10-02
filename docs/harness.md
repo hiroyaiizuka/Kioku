@@ -17,31 +17,73 @@ CI は `npm ci` と `npm run check` を実行し dist を検査用 artifact に�
 
 1. `npm ci && npm run check`
 2. 初回だけ `npm run harness:prepare`。`test-vault/` が存在すれば拒否し、既存 Vault を採用しない。
-3. 手動編集後は Obsidian を閉じて `npm run harness:update`。built plugin 4 files 以外を変えない。
+3. 手動編集後は専用インスタンスを `npm run harness:quit` で止めて `npm run harness:update`。built plugin 4 files 以外を変えない。
 4. 起動前に `npm run harness:preflight`。source inputs = 再生成した production bytes/imports = dist = installed bytes、marker、ID/version/build ID、enabled plugin が Kioku だけであることを見る。再生成はメモリ上のみで dist を修復しない。
 
 prepare/update/preflight は filesystem の成功であり、Obsidian UI の成功ではない。`test-vault/Welcome.md` は初回 fixture であり update では触れない。本番 Vault を指定する引数はない。
+
+## 専用 Obsidian インスタンス（利用者の Obsidian は開いたまま）
+
+利用者の通常の Obsidian は終了させない。Electron の single-instance lock は `--user-data-dir` ごとなので、harness はプロジェクト内の専用 profile で2つ目の Obsidian を並行起動する。harness とエージェントは、アプリ名による終了・起動（`osascript quit`、`pkill`/`killall`、`open -a`/`open -n -a`）を一切実行しない。
+
+- `npm run harness:launch`（macOS のみ。他 platform は推測せず拒否）
+  - preflight 後、`.tooling/obsidian-profile/`（git 管理外）を containment/symlink/hard link 検査付きで作り、profile の `obsidian.json` に **test-vault だけ**を `open: true` で登録する（vault ID は test-vault path から決定的に導出、`updateDisabled: true` で profile 内の自動更新を止める）。
+  - 利用者の `~/Library/Application Support/obsidian/` から最新 semver の `obsidian-<ver>.asar` を **読み取りだけ**して profile へ copy する（hash 一致なら再利用、他 version の asar は profile から除去）。installer 同梱版（例: 1.6.7）ではなくこの版が起動する。asar が無い、または `manifest.minAppVersion` 未満なら拒否する。
+  - `/Applications/Obsidian.app/Contents/MacOS/Obsidian`（`KIOKU_OBSIDIAN_BINARY` で変更可。正規化済み絶対 path の既存実行ファイルだけ）を `--user-data-dir=<profile> --remote-debugging-port=<KIOKU_CDP_PORT, 既定 9222> --remote-debugging-address=127.0.0.1` で detached 直接実行し、出力は `.tooling/obsidian-instance.log`。環境変数は `HOME` を含めそのまま引き継ぎ、`ELECTRON_*`/`NODE_OPTIONS` だけ渡さない。
+  - 以前は子プロセスの `HOME` を `.tooling/obsidian-home/` にしていたが、実機で login keychain が見つからず Electron safeStorage（"Obsidian Safe Storage"）が `SecKeychainAddGenericPassword` → `makeLoginAuthUI` → `AuthorizationCopyRights` に入り、SecurityAgent の認証ダイアログでメインスレッドが止まった（CDP page が出ず 90 秒で launch timeout、SIGTERM も 20 秒以内に処理されなかった。`artifacts/lev-279/e5f67e6-partial/RECORD.md` Step 3。git 管理外のローカル証跡）。そのため HOME の上書きはやめた。過去の版が残した `.tooling/obsidian-home/` は不要で、専用インスタンス停止中に `rm -rf .tooling/obsidian-home` で手動削除してよい（プロジェクト内の .tooling だけ。harness は自動削除しない）。
+  - **CLI socket**: インストール済み 1.14.3 の `main.js` は `var W=process.platform==="darwin"` と `T=oe?…:F.join(!W&&process.env.XDG_RUNTIME_DIR||ge.homedir(),".obsidian-cli.sock")` で socket path を決め、`if(!oe)try{m.unlinkSync(T)}catch(t){}…Qe.listen(T)` で起動時に置き換え、`will-quit` で `m.unlinkSync(T)` する。macOS（`W`）では `XDG_RUNTIME_DIR` は無視されるため、HOME を変えずに socket を分ける手段は無い。したがって専用インスタンスは起動中 `~/.obsidian-cli.sock`（`$HOME` 直下）を自分のものにし、`harness:quit` 時に削除する。**既定では、起動前に lstat だけで判定し、この socket が存在すれば launch を拒否する。** 判定は何も作らない前段と、profile 準備後の spawn 直前の2回行う。lstat が ENOENT 以外のエラー（EACCES、ENOTDIR、ELOOP など）なら判定不能として拒否する。`HOME` が空文字なら Node の `os.homedir()` が空を返し Obsidian が cwd 相対に socket を作るため、launch を拒否する（未設定なら passwd の home）。spawn から Obsidian 自身の unlink/listen までの1秒未満の窓で利用者の Obsidian が socket を作る競合は、外から防げない残存リスク。 奪ってよいのは `KIOKU_ALLOW_CLI_SOCKET_TAKEOVER=1` を明示した場合だけで、その場合: 実行中は利用者やエージェントの `obsidian` CLI コマンドが専用 test-vault インスタンスに届く（smoke 中は CLI を使わない。CLI による書き込みは baseline を無効にする）。quit で socket が削除され、利用者の CLI は利用者の Obsidian を再起動するまで使えない（GUI には影響しない想定）。launch 出力の `cliSocket.existedBeforeLaunch`/`takenOver` に記録する。**専用インスタンスの実行中に利用者が自分の Obsidian を起動すると、その Obsidian が socket を作り直し、`harness:quit` 時に専用インスタンスの will-quit の unlink がそれを削除する**（asar からの推定、未検証）。実行中は自分の Obsidian を起動しないか、起動した場合は quit 後に CLI のため再起動が必要になると考える。launch は page ready 後に socket を lstat し、存在すれば `{dev, ino}` を state に記録する。`harness:quit` は SIGTERM 直前と終了後に lstat だけで確認し（触らない）、直前の socket の `{dev, ino}` が記録と異なる（または記録が無いのに socket がある）場合だけ、他者（多くは利用者の Obsidian）が作り直したとみなして警告する。
+  - **keychain**: 専用インスタンスは通常起動と同じく利用者の login keychain の "Obsidian Safe Storage" 項目を共有する（既存項目の読み取りを想定するが、読み取りだけであることは未検証）。
+  - PID・profile・port・startedAt を `.tooling/obsidian-instance.json` に atomic write する。記録済みインスタンスが生存中、記録外でも専用 profile を使うプロセスがある、CDP port が使用中、のいずれかなら起動しない。
+  - CDP で test-vault の native page がちょうど1つ（他 Vault の page なし）になり layout ready、title の版が copy した asar と一致するまで待つ。
+  - **Restricted mode**: Obsidian は community plugin があり per-vault の選択が localStorage（`enable-plugin-<vaultId>`）に無いと trust dialog（`.mod-trust-folder`）を出す。dialog の有効化 button は `app.plugins.setEnable(true)` を呼んで設定画面を開くだけなので、launch は CDP で同じ `app.plugins.setEnable(true)` を呼び（設定画面は開かない）、dialog を Escape（cancel 経路、閉じるだけ）で閉じる。dialog が無く選択が `false` の場合も同じ呼び出しで解除する。trust dialog 以外の modal があれば click せず失敗する。最後に restricted mode off、loaded/configured plugin が厳密に `kioku`、open modal 0 を確認する。選択は**専用 profile の localStorage だけ**に保存され、利用者 profile には触れない。2回目以降の launch では Obsidian 自身が起動時に Kioku を読み込む（`restrictedMode: already-off`）。
+  - 出力 JSON（pid、version、port など）は起動の成功であり UI PASS ではない。
+- `npm run harness:quit`: 記録 PID だけを対象に、`ps -ww -o command= -p <pid>` の command line が専用 `--user-data-dir=<profile>` を厳密に含むことを確認してから SIGTERM し、終了を待って報告し state を消す。記録が無い/既に終了済みなら何もせず報告する。PID が別プロセスに再利用されていれば signal せず state だけ消す。SIGTERM 後の待ち時間は既定 60 秒（`KIOKU_QUIT_TIMEOUT_MS`、1000〜600000）。終了しなければ state を残し、記録 PID 以外には何も signal せず失敗する。自動で SIGKILL・名前指定はしない。システムダイアログでメインスレッドが止まっている可能性があるので画面を確認し、`harness:quit` を再実行する。それでも止まらない場合の SIGKILL は**オーケストレーターまたは利用者の承認を得た後だけ**、検証済みの記録 PID にだけ行う:
+
+  ```sh
+  ps -ww -o command= -p <state の pid>   # --user-data-dir=<プロジェクトの絶対パス>/.tooling/obsidian-profile を厳密に含むことを確認
+  kill -KILL <その pid>                  # 確認できた場合だけ。その後 npm run harness:quit で state を片付ける
+  ```
+
+ 記録 PID が消えているのに専用 profile を使う記録外プロセスがある場合（Obsidian 自身の `app.relaunch()` など）は、signal せずに PID と command line を列挙して失敗する。その場合の手動停止は次の手順だけを使う（Dock からの終了やアプリ名指定は利用者のインスタンスに当たり得るので禁止）:
+
+  ```sh
+  ps -A -ww -o pid=,command= | grep -F -- '--user-data-dir=<プロジェクトの絶対パス>/.tooling/obsidian-profile'
+  kill <上で表示され、command line に専用 --user-data-dir を厳密に含む main プロセスの PID（grep 自身の行と --type= 付き helper は除く）>
+  ```
+
+- `harness:launch` は起動者 PID を書いた `.tooling/obsidian-launch.lock` で同時実行を拒否する。Ctrl-C などで残った lock は、記録 PID が終了していれば次回の launch が一意名へ rename してから内容を再確認して回収する（競合 launcher の新しい lock は戻す。戻す前に3つ目の launcher が新しい lock を作っていた場合は、2つ目の lock を `obsidian-launch.lock.stale-*` として残し、その名前を警告に出して再判定する。この3者競合では2つ目の launcher が自分は lock を持っていると思ったまま続行し得るが、後続の記録済みインスタンス・専用 profile プロセス・CDP port の検査で二重起動は通常拒否される。ただし両者がほぼ同時にそれらの検査を通過する完全な競合までは保証しない）。終了時は自分の PID の lock だけを消し、解放に失敗しても launch 結果は隠さず警告だけ出す（lock は stale 回収に任せる）。launch 開始時、owner PID が終了済みの `obsidian-launch.lock.stale-*` だけを削除する。
+
+利用者向けの手動操作の案内: 専用インスタンスの実行中に普段の Obsidian を開くときは、利用者自身が `open -n -a Obsidian` を実行する（ただし上記のとおり、その Obsidian の CLI socket は専用インスタンスの quit で消え得るので、CLI を使うなら quit 後に再起動する。harness とエージェントは実行しない。Dock のクリックは専用インスタンスを前面に出すだけのことがある）。どちらの window かは title の Vault 名で見分ける。CDP port は loopback だけだが、実行中は同じマシンの任意のローカルプロセスが Node 権限で JS を実行できるため、テストしないときは `harness:quit` で止める。
+
+test-vault を利用者の通常 Obsidian で開かない（利用者 profile は検査しないため、その場合の書き込みは harness が検出できない）。残存リスク: 同じ bundle ID のため Dock に2つ表示され、`obsidian://` URL がどちらに届くかは macOS 次第。bundle 単位の macOS 状態（`md.obsidian` の NSUserDefaults、Saved Application State、`~/Library/Logs` など）と `~/.obsidian-cli.sock` は利用者の Obsidian と共有される（上記）。CDP port は起動前に空きを確認するが、page と起動 PID の対応までは証明しない（test-vault を開く page であることは確認する）。trust dialog と Escape の挙動は Obsidian 1.14.3 の app code を読んだ結果で、実機証跡で確認するまでは未検証。`harness:quit` は main PID 終了後、同じ profile を持つ helper が消えるまで（signal せず）待つ。login keychain の "Obsidian Safe Storage"（SecretStorage が使う safeStorage）は利用者のインスタンスと共有される（読み取りだけの想定だが未検証）。launch が timeout したときは、keychain などのシステムダイアログでメインスレッドが止まっている可能性があるので画面を確認する。起動時に `setAsDefaultProtocolClient("obsidian")` が呼ばれるが、同じ bundle なので既定 handler は変わらない想定（未検証）。
 
 ## Obsidian desktop smoke
 
 **enable/startup より前**にノートの baseline を採る。起動後に snapshot を採り直すと onload による書き込みを見逃すため禁止する。
 
-1. テスト担当が専用 Vault を開く Obsidian を完全に閉じ、必要なら `harness:update` を行う。
-2. `KIOKU_CONFIRM_VAULT_CLOSED=1 KIOKU_CDP_URL=http://127.0.0.1:9222 npm run harness:e2e:smoke -- baseline`。script は閉じたことの担当者確認を必須とし、既に CDP targets がある場合は拒否する。`artifacts/e2e-smoke/baselines/<ID>.json` に専用 Vault の内容ファイル一覧と SHA-256 を排他的に保存し、ID を表示する。この段階の status は `CAPTURED` であり、UI の PASS ではない。
-3. 表示された ID を `KIOKU_BASELINE_ID` に指定し、同じ build の Obsidian を remote-debugging port 付きで専用 Vault に起動する（初回の Kioku 有効化を含む）。
-4. `KIOKU_BASELINE_ID=<ID> KIOKU_CDP_URL=http://127.0.0.1:9222 npm run harness:e2e:smoke`。baseline が無い・identity が異なる場合は FAIL。startup 後かつ UI 操作前、各 open/close 後、Escape 後のファイル一覧/hash が **起動前 baseline** と同じことを必須判定し、追加・削除・rename・bytes 変更のいずれも FAIL にする。同じ各時点で、学習データのフォルダ（プラグインの `data.json` の `dataFolder`、既定 `Kioku`）が**空でも作られていない**ことを判定する（ファイルの snapshot だけでは空フォルダを検出できないため）。baseline 時点で既にフォルダがあった Vault（評価済み）では、フォルダが残っていることを判定し、中のファイルは内容 baseline で比較する。
+1. 専用インスタンスが動いていれば `npm run harness:quit`。必要なら `harness:update` を行う。利用者の Obsidian は閉じない。
+2. `npm run harness:e2e:smoke -- baseline`。記録済み専用インスタンスの生存（PID + command line）、専用 profile を使うプロセス、CDP port（`KIOKU_CDP_URL` の port、`KIOKU_CDP_PORT`、記録 port）の応答を自動検査し、どれかがあれば拒否する。利用者の Obsidian の起動有無は検査も要求もしない（旧 `KIOKU_CONFIRM_VAULT_CLOSED` は廃止）。`artifacts/e2e-smoke/baselines/<ID>.json` に専用 Vault の内容ファイル一覧と SHA-256、学習データのフォルダ（プラグインの `data.json` の `dataFolder`、既定 `Kioku`）の有無を排他的に保存し、ID を表示する。この段階の status は `CAPTURED` であり、UI の PASS ではない。
+3. `npm run harness:launch`（初回は上記の restricted mode 解除 = Kioku の初回有効化を含む）。
+4. `KIOKU_BASELINE_ID=<ID> npm run harness:e2e:smoke`。baseline が無い・identity が異なる・CDP port が記録 port と異なる場合は FAIL。開始時に Kioku 以外の `.modal-container`（trust dialog など）が開いていれば UI 操作前に FAIL する。Kioku 自身の modal（container 内の modal 要素 `.modal` に `kioku-startup-modal`・`kioku-deck-picker-modal`・`kioku-candidate-modal` のどれかがあるもの。復習画面はデッキ選択 modal の中に描画される）は foreign とみなさない。デッキ選択を開いている間と PASS 直前にも同じ判定をする。startup 後かつ UI 操作前、各 open/close 後、Escape 後のファイル一覧/hash が **起動前 baseline** と同じことを必須判定し、追加・削除・rename・bytes 変更のいずれも FAIL にする。同じ各時点で、学習データのフォルダが**空でも作られていない**ことを判定する（ファイルの snapshot だけでは空フォルダを検出できないため）。baseline 時点で既にフォルダがあった Vault（評価済み）では、フォルダが残っていることを判定し、中のファイルは内容 baseline で比較する。
+5. restart pair: `npm run harness:quit && npm run harness:launch` の後、**同じ** `KIOKU_BASELINE_ID` で 4 を再実行する。restart 前に baseline を採り直さない。
 
 script は loopback CDP 以外を拒否し、専用 Vault の native page が1つ、ribbon が1つであることを検査する。M2 から ribbon はデッキ選択を開くので、ribbon → デッキ選択（root `.kioku-deck-picker-modal` の version/build ID data attribute が current preflight と一致、読み込み完了、「全デッキ」表示、中央）→ 閉じるを2回、ribbon → デッキ選択 → Escape を1回行う。状態 modal はコマンド `kioku:open-startup` から開き、`.kioku-build-identity` の version/build ID と未実装の明示（AI）と中央表示を検査して閉じる。page error を確認し、`artifacts/e2e-smoke/` に JSON と screenshot（デッキ選択2枚、状態 modal 1枚）を残す。実際の plugin/modal が無ければ FAIL する。
 
-baseline の対象は Markdown・Excalidraw・添付を含む全内容ファイル。Obsidian が変更する `.obsidian/` と harness marker `.kioku-generated` だけを除外する。baseline 自体を再保存・上書きしない。テスト中の手動ノート編集は禁止。CDP の無い別プロセスまで script が閉鎖を証明することはできず、担当者の閉鎖確認が必要。書き込み後に元 bytes へ戻すような一時的 I/O は snapshot だけでは検出できないため、unit mock は Vault/adapter/Editor 経路の read/write を拒否・監視し、レビューの startup-write mutant が落ちることも固定する。
+baseline の対象は Markdown・Excalidraw・添付を含む全内容ファイル。Obsidian が変更する `.obsidian/` と harness marker `.kioku-generated` だけを除外する。baseline 自体を再保存・上書きしない。テスト中の手動ノート編集は禁止。停止の証明は専用インスタンス（記録 PID、専用 profile を持つプロセス、CDP port）に限られ、test-vault を通常の Obsidian で開かない運用が前提。書き込み後に元 bytes へ戻すような一時的 I/O は snapshot だけでは検出できないため、unit mock は Vault/adapter/Editor 経路の read/write を拒否・監視し、レビューの startup-write mutant が落ちることも固定する。
 
 `tests/e2e/note-preservation.test.mjs` は script を CDP **プロトコル模擬**で検査する非UI回帰ケース。模擬 run の PASS/画像は実機証跡ではない。通常の実機 smoke は native Obsidian だけで実行する。
 
-desktop restart は script 自身がアプリを終了/起動しないため、担当が restart 後に **同じ KIOKU_BASELINE_ID** でもう一度 smoke を実行し、2 run の証跡を関連付ける。restart 前に baseline を採り直さない。単独 run の record は restart を `NOT TESTED` と明記する。実機を起動していない開発ワーカーは PASS を報告してはならない。
+smoke script 自身はアプリを終了/起動しない。restart は `harness:quit` → `harness:launch` で行い、**同じ KIOKU_BASELINE_ID** でもう一度 smoke を実行して 2 run の証跡を関連付ける。restart 前に baseline を採り直さない。単独 run の record は restart を `NOT TESTED` と明記する。実機を起動していない開発ワーカーは PASS を報告してはならない。
 
 ## M1 実機確認（LEV-275、testing agent が実施）
 
 `npm run check` と mock テストは書き込み経路の契約を固定するだけで、実機成功ではない。M1 の UI/保存経路は専用 Vault の Obsidian desktop で次を確認し、操作前後のノート bytes（または diff）と screenshot を `artifacts/` に残す。本番 Vault は使わない。
+
+実機は **LEV-279 の専用インスタンスだけ**で行う（上記「専用 Obsidian インスタンス」）。利用者の Obsidian は閉じない・アプリ名で終了しない。
+
+- 起動・終了は `npm run harness:launch` / `npm run harness:quit` だけ。`~/.obsidian-cli.sock` が既にある（利用者の Obsidian が起動中など）と launch は既定で拒否する。`KIOKU_ALLOW_CLI_SOCKET_TAKEOVER=1` は利用者の明示同意がある場合だけ付ける。実行中は `obsidian` CLI が test-vault に届くので、確認中に CLI を使わない。
+- 項目1（既存 smoke）は採用などの書き込みより**前に**行う: `harness:quit`（動いていれば）→ `npm run harness:e2e:smoke -- baseline` → `harness:launch` → `KIOKU_BASELINE_ID=<ID> npm run harness:e2e:smoke`。項目2以降の採用は test-vault を正当に書き換えるため、その後に smoke を取り直す場合は `harness:quit` → 新しい baseline → `harness:launch` の順にする（起動中に baseline を採らない）。
+- 再起動が要る確認（restart pair、プラグイン再読込後の採用済み表示など）は `harness:quit` → `harness:launch` で行う。Canvas・popover・2ペインなどの操作は専用インスタンスの window（title の Vault 名が test-vault）で行う。
 
 1. 状態 modal（M1 時点は ribbon、M2 からはコマンド）が実装済み範囲と未実装を表示し、開閉だけでノートが変わらない（既存 smoke）。
 2. 日本語の Q/A（`Q:`/`A:`、`問：`/`答：`、全角コロン、複数行の答え）を含むノートでコマンド「開いているノート・選択範囲から問い・答えの候補を抽出」→ 中央ポップアップに原文と編集欄が出る。選択範囲ありでは重なるブロックだけ。
@@ -65,7 +107,9 @@ desktop restart は script 自身がアプリを終了/起動しないため、�
 
 `npm run check`・mock テスト・CDP 模擬・preflight の成功は、デッキ・復習・保存の契約を固定するだけで実機成功ではない。専用 Vault（`test-vault/`）の Obsidian desktop で次を確認し、`artifacts/lev-276/` に baseline、screenshot、操作前後のノートと `Kioku/` の bytes（または diff）、`history-YYYY.jsonl` の行数を残す。本番 Vault は使わない。実機を起動していない開発ワーカーはここを PASS と報告しない。
 
-準備：`#kioku`・`#Kioku/医学`・`#kioku/医学/生理`・frontmatter `tags: [kioku/英語]`・コードブロック内だけに `#kioku` があるノート・2つのデッキタグを持つノート・同じ `^kioku-…` を同内容/異内容で持つ2組のノート・`![[…]]` を問いに含むカード・トリガータグの無いノートに、採用済みカード（M1 で採用、または `^kioku-<10文字>` を手で付与）を用意する。新規上限の確認用に新規カードを 21 枚以上用意する。用意は Obsidian を閉じて行い、そのあと smoke の baseline を採る。
+準備：`#kioku`・`#Kioku/医学`・`#kioku/医学/生理`・frontmatter `tags: [kioku/英語]`・コードブロック内だけに `#kioku` があるノート・2つのデッキタグを持つノート・同じ `^kioku-…` を同内容/異内容で持つ2組のノート・`![[…]]` を問いに含むカード・トリガータグの無いノートに、採用済みカード（M1 で採用、または `^kioku-<10文字>` を手で付与）を用意する。新規上限の確認用に新規カードを 21 枚以上用意する。用意は専用インスタンスを `npm run harness:quit` で止めて行い、そのあと smoke の baseline を採る。
+
+実機は M1 と同じく **LEV-279 の専用インスタンスだけ**で行う（起動・終了は `harness:launch` / `harness:quit` だけ、利用者の Obsidian は閉じない・アプリ名で終了しない、`KIOKU_ALLOW_CLI_SOCKET_TAKEOVER=1` は利用者の明示同意がある場合だけ、確認中に `obsidian` CLI を使わない）。項目1・2（smoke）は評価などの書き込みより**前に**、`harness:quit`（動いていれば）→ `npm run harness:e2e:smoke -- baseline` → `harness:launch` → `KIOKU_BASELINE_ID=<ID> npm run harness:e2e:smoke` で行う。評価後に smoke を取り直す場合は `harness:quit` → 新しい baseline → `harness:launch` の順にする（`Kioku/` がある Vault では smoke はフォルダが残ることを判定する）。`state.json`・履歴を Obsidian の外で編集する確認（項目12）は、専用インスタンスを `harness:quit` で止めてから行い、`harness:launch` で開き直す。
 
 1. 起動直後にノートも `Kioku/` も読み書きされない（smoke の startup 判定、`Kioku/` 未作成）。
 2. ribbon → デッキ選択の開閉・Escape で Vault の内容ファイルが変わらず、`Kioku/`（空フォルダを含む）が作られない。デッキ選択 root の identity が preflight と一致（smoke）。
@@ -74,14 +118,14 @@ desktop restart は script 自身がアプリを終了/起動しないため、�
 5. 評価で `Kioku/history-YYYY.jsonl` に1行増え、`Kioku/state.json` が更新され、`state.json` が既にあった場合はセッション最初の保存で `state.json.bak` が作られる。ノートの bytes は変わらない。
 6. Skip（`S`、答えの表示前後）で `Kioku/` とノートの bytes が変わらず、同じセッションでは再出題されず、デッキ選択を開き直すと New/Due に残っている。
 7. 途中で閉じる・Escape：評価済みの分だけ履歴にあり、表示中の未評価カードは変化しない。
-8. Obsidian を終了 → 再起動で、期日と Due/New/Total が終了前と一致する。`harness:update` 後も `Kioku/` が残る（update は4配布物以外を変えない）。
+8. `harness:quit` → `harness:launch` の再起動で、期日と Due/New/Total が終了前と一致する。`harness:update` 後も `Kioku/` が残る（update は4配布物以外を変えない）。
 9. 新規上限：既定 20 枚。デッキ選択に「今日の新規 残り X 枚」、21 枚目以降は「新規の残りは明日以降」。完了画面の「今日だけ あと10枚」で 10 枚追加され、`state.json` の `today.extraNew` が 10 になる。まだ一度も評価していない Vault（`Kioku/` 無し）で押した場合は `Kioku/` が作られず、その後の最初の評価で `extraNew` が保存される。
 10. 今日評価したカードが今日の Due に再び出ない（「もう一度」でも次回は翌日以降。日付境界と夏時間は単体テストで固定）。
 11. カードのブロックを別ノートへ移動・ノートを改名しても日程が保持される。ブロック削除 → Undo で同じ ID が戻り日程も戻る。原文の編集・`%%kioku-edit%%` の追加後も日程が保持され、次の評価のイベントの `contentHash` が変わる。
 12. `state.json` を壊す（JSON として不正にする）と読み取り専用になり、理由が表示され、評価ボタンが無効で `state.json` が上書きされない。`state.json` を消すと履歴から再構築され、最初の評価で書き直される。`state.json` を古い版（評価前の `.bak` など）に戻すと、反映済み位置より後ろの履歴が再生されて追いつく（同じ `eventId` の行を手で複製しても二重に数えない）。
     - 12a. 履歴の最終行を途中で切る（改行も消す）。結果は、その行が `state.json` に**まだ反映されていないか、もう反映されているか**で分かれる（設計どおり）。
         - 12a-1（未反映。追記中のクラッシュの実際の形）：`state.json` の `applied` がその行より前を指している状態で最終行を切る（例：`state.json` を評価前の `.bak` の内容に戻す、または `state.json` と `.bak`（と `.tmp`）を消してから最終行を切る。`state.json` だけを消すと、切った行を含む `.bak` が残っている場合に欠落判定の基準になり 12a-2 になる）。デッキ選択に「記録ファイル …history-YYYY.jsonl の最終行（N 行目）が途中で切れています。読み取り専用にしています。」と確認ボタン「不完全な最終行を退避して続ける」が出る。押したときだけ、その1行が `history-YYYY.jsonl.broken` に追記され（先）、続いて履歴からその行だけが取り除かれ（後）、読み直されて評価できるようになる。押さなければ何も書かれない。
-        - 12a-2（反映済み。外部での破損）：`state.json` の `applied` が既にその行を指している状態で最終行を切る（評価直後にそのまま切る）。履歴が「反映済みより短い」と判定され、「記録ファイル … が見つからないか、日程ファイルが反映済みとしている行より短くなっています。…読み取り専用にしています。」が出て、確認ボタンは出ない。何も書かれない。復旧は README「記録が読めないときの復旧」の手順（Obsidian を閉じ、`Kioku/` をコピーしてから、切れた行を `history-YYYY.jsonl.broken` に移すか消し、`state.json`・`state.json.bak`・`state.json.tmp` を消して開き直すと履歴から作り直される。または `.bak` / 記録ファイルをバックアップから戻す）。
+        - 12a-2（反映済み。外部での破損）：`state.json` の `applied` が既にその行を指している状態で最終行を切る（評価直後にそのまま切る）。履歴が「反映済みより短い」と判定され、「記録ファイル … が見つからないか、日程ファイルが反映済みとしている行より短くなっています。…読み取り専用にしています。」が出て、確認ボタンは出ない。何も書かれない。復旧は README「記録が読めないときの復旧」の手順（実機確認では「Obsidian を閉じ」を専用インスタンスの `harness:quit` に読み替える。`Kioku/` をコピーしてから、切れた行を `history-YYYY.jsonl.broken` に移すか消し、`state.json`・`state.json.bak`・`state.json.tmp` を消して開き直すと履歴から作り直される。または `.bak` / 記録ファイルをバックアップから戻す）。
         - 途中の行を壊すと、ファイル名と行番号が表示され読み取り専用のまま（ボタンは出ない）。最終行の改行だけを消した場合（行自体は正しい）は、次の評価の前に改行が補われ、行が連結されない。
         - 書き込み経路の観察（Obsidian 1.14.3 実機）：既存の `state.json` への `rename` による上書きは「Destination file already exists!」で失敗するため、保存は毎回「`state.json.tmp` に書いて確認 → `state.json` を削除 → `rename`」の経路を通る。保存後に `state.json.tmp` は残らず、`state.json.bak` はある。
     - 12b. 設定の「学習データのフォルダ」を、データの無いフォルダ名に変えて「変更」を押すと適用されず「古いフォルダ（Kioku）にデータがあります。移動してから変更してください。」が表示され、`data.json` の `dataFolder` が変わらない。Obsidian の外で `Kioku/` を移動してから同じ名前に変えると適用される。
