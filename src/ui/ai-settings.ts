@@ -74,7 +74,7 @@ export function renderAiSettings(containerEl: HTMLElement, section: AiSettingsSe
       text.setValue(local.baseUrl).onChange(guarded(async (value: string) => {
         const url = normalizeBaseUrl(value);
         if (!url) {
-          urlStatus.setText('HTTP か HTTPS の接続先（ホストとポート）を入力してください。保存していません。');
+          urlStatus.setText('HTTP か HTTPS の接続先を、ホストとポートまでで入力してください（/v1 などのパスは付けません）。保存していません。');
           return;
         }
         urlStatus.setText('');
@@ -93,11 +93,11 @@ export function renderAiSettings(containerEl: HTMLElement, section: AiSettingsSe
       text.inputEl.addEventListener('change', redrawAfterSave);
     });
   if (localIsExternal(local)) {
-    const cloud = local.server === 'ollama' && isCloudModel(local.model);
+    const cloud = isCloudModel(local.model);
     const host = hostOf(local.baseUrl);
     new Setting(containerEl)
       .setName(`外部への送信に同意する（${host}）`)
-      .setDesc(`${cloud ? 'このモデルは Ollama の cloud モデルで、Ollama のサーバーで実行されます。' : 'この接続先はこのパソコンの外です。'}同意するまで送信しません。接続先・サーバー・モデルを変えると同意し直しが必要です。`)
+      .setDesc(`${cloud ? 'このモデルは名前が cloud で終わるため、外部（Ollama の cloud モデルなど）で実行されるものとして扱います。' : 'この接続先はこのパソコンの外です。'}同意するまで送信しません。接続先・サーバー・モデルを変えると同意し直しが必要です。`)
       .addToggle((toggle) => toggle.setValue(hasConsent('local', ai)).onChange(guarded(async (value: boolean) => {
         await save(withLocal((latest) => ({ consent: value ? consentFingerprint('local', latest) : null })));
         redraw();

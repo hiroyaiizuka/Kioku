@@ -23,7 +23,7 @@ export class StartupModal extends Modal {
       cls: 'kioku-startup-status',
     });
     this.contentEl.createEl('p', {
-      text: 'AI による候補作成（一部実装）：設定したときだけ動き、候補は人が確認して採用します。生成はこのパソコンで動くサーバー、判定は外部の判定サービス（設定画面の AI の項目）か判定なしに対応しています。ほかの判定・生成の方式は未実装です。',
+      text: 'AI による候補作成（一部実装）：設定したときだけ動き、候補は人が確認して採用します。生成は OpenAI 互換のサーバー（既定はこのパソコン上。ほかの接続先や名前が cloud で終わるモデルは、外部への送信に同意したときだけ）、判定は外部の判定サービス（設定画面の AI の項目）か判定なしに対応しています。ほかの判定・生成の方式は未実装です。',
       cls: 'kioku-startup-unimplemented',
     });
     this.contentEl.createEl('p', {

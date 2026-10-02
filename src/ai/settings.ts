@@ -65,7 +65,10 @@ const consentOf = (value: unknown): string | null => (typeof value === 'string' 
 const seconds = (value: unknown, fallback: number): number =>
   (Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 600 ? value as number : fallback);
 
-/** `http(s)://host[:port]` without a path, or null when unusable. */
+/**
+ * `http(s)://host[:port]`, or null when unusable. A path (e.g. `/v1`) is refused rather than kept:
+ * Kioku appends the endpoint path itself, so `http://localhost:11434/v1` would become `/v1/v1/…`.
+ */
 export function normalizeBaseUrl(input: string): string | null {
   let url: URL;
   try {
@@ -75,7 +78,8 @@ export function normalizeBaseUrl(input: string): string | null {
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
   if (url.username || url.password || url.search || url.hash) return null;
-  return `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, '')}`;
+  if (url.pathname !== '/' && url.pathname !== '') return null;
+  return `${url.protocol}//${url.host}`;
 }
 
 /** Reads the `ai` section leniently; anything missing or invalid falls back to AI off / defaults. */
@@ -102,7 +106,10 @@ export function parseAiSettings(raw: unknown): AiSettings {
   };
 }
 
-/** True for localhost, 127.0.0.0/8 and ::1. Anything else (including LAN hosts) is external. */
+/**
+ * True for localhost, 127.0.0.0/8 and ::1. Anything else is external, including LAN hosts and
+ * `0.0.0.0` (a listen-on-all address, not a destination Kioku can prove is this computer).
+ */
 export function isLoopbackHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
   return host === 'localhost' || host === '::1' || /^127(?:\.\d{1,3}){3}$/.test(host);
@@ -110,7 +117,8 @@ export function isLoopbackHost(hostname: string): boolean {
 
 /**
  * Ollama cloud models run on Ollama's servers even through localhost (§3.4, Q6). Detected by the
- * name only (`:cloud` / `-cloud` suffix); whether `/api/show` can tell is unverified.
+ * name only (`:cloud` / `-cloud` suffix); whether `/api/show` can tell is unverified. Applied to
+ * every server type (erring toward external): another server may proxy to Ollama.
  */
 export function isCloudModel(model: string): boolean {
   return /[:-]cloud$/i.test(model.trim());
@@ -131,7 +139,7 @@ export function localIsExternal(local: LocalProviderSettings): boolean {
   } catch {
     return true;
   }
-  return !isLoopbackHost(hostname) || (local.server === 'ollama' && isCloudModel(local.model));
+  return !isLoopbackHost(hostname) || isCloudModel(local.model);
 }
 
 /**

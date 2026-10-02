@@ -214,4 +214,13 @@ describe('AI settings tab', () => {
     expect(plugin.data.ai.providers.jev).toMatchObject({ apiKey: KEY, consent: 'jev|api.typesafe.ai|jev-latest' });
     expect(network.calls).toEqual([]);
   });
+
+  it('refuses a base URL with a path and explains why, keeping the saved one', async () => {
+    const { plugin } = open({ ai: ai() });
+    tab(plugin); await flush();
+    const url = field('生成：接続先').querySelector('input');
+    url.value = 'http://localhost:11434/v1'; url.dispatchEvent(new window.Event('input')); await flush();
+    expect(field('生成：接続先').querySelector('.kioku-settings-status').textContent).toContain('/v1 などのパスは付けません');
+    expect(plugin.saved).toEqual([]);
+  });
 });

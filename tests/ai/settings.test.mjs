@@ -21,6 +21,10 @@ describe('ai settings (data.json `ai` section)', () => {
       timeouts: { judgeSeconds: 20, generateSeconds: 90 } });
     expect(normalizeBaseUrl('http://127.0.0.1:11434/')).toBe('http://127.0.0.1:11434');
     expect(normalizeBaseUrl('http://user:pw@host')).toBeNull();
+    // A path would be doubled by the endpoint Kioku appends (`/v1/v1/chat/completions`).
+    expect(['http://localhost:11434/v1', 'http://localhost:11434/v1/', 'http://localhost:1234/api'].map(normalizeBaseUrl)).toEqual([null, null, null]);
+    expect(normalizeBaseUrl('http://localhost:11434/')).toBe('http://localhost:11434');
+    expect(parseAiSettings({ providers: { local: { baseUrl: 'http://localhost:11434/v1' } } }).providers.local.baseUrl).toBe('http://localhost:11434');
   });
 
   it('keeps the ai section when another setting is saved, and an M2 data.json loads with AI off', async () => {
@@ -45,6 +49,10 @@ describe('ai settings (data.json `ai` section)', () => {
     expect(localIsExternal({ ...local, model: 'qwen3:8b' })).toBe(false);
     expect(localIsExternal({ ...local, model: 'gpt-oss:20b-cloud' })).toBe(true);
     expect(localIsExternal({ ...local, baseUrl: 'http://192.168.1.5:11434', model: 'qwen3:8b' })).toBe(true);
+    expect(localIsExternal({ ...local, baseUrl: 'http://0.0.0.0:11434', model: 'qwen3:8b' })).toBe(true);
+    // The cloud name rule applies to every server type (another server may proxy to Ollama).
+    expect(localIsExternal({ ...local, server: 'llamacpp', baseUrl: 'http://localhost:8080', model: 'gpt-oss:20b-cloud' })).toBe(true);
+    expect(localIsExternal({ ...local, server: 'lmstudio', baseUrl: 'http://localhost:1234', model: 'qwen-cloud' })).toBe(true);
   });
 
   it('invalidates consent when the destination or model changes', () => {
