@@ -58,7 +58,7 @@ describe('quote matching (§6.1)', () => {
     const quote = locateQuote(NOTE, source, '葉緑体で行われる。');
     expect(quote.text).toBe('葉緑体で行われる。');
     expect(NOTE.slice(quote.start, quote.end)).toBe('葉緑体で行われる。');
-    expect(quote.anchor.text).toBe('# 光合成\n光合成は、光エネルギーを使って糖を作る反応である。葉緑体で行われる。%%内緒のメモ%%');
+    expect(quote.anchor.text).toBe('光合成は、光エネルギーを使って糖を作る反応である。葉緑体で行われる。%%内緒のメモ%%');
     expect(quote.elsewhere).toBe(false);
   });
 

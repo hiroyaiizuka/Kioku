@@ -27,6 +27,24 @@ describe('generated card insertion (§9, Q2)', () => {
     expect(existingCardIds(plan.next)).toEqual(new Set([ID]));
   });
 
+  it('ends a block at an ATX heading or thematic break, so sections stay independent', () => {
+    const note = '# A\nPara one fact.\n## B\nOther section text.\n';
+    const recorded = anchorOf(note, 'Para one fact.');
+    expect(recorded.text).toBe('Para one fact.');
+    const plan = planInsertion(note, recorded, CARD, fixed);
+    expect(plan.next).toBe('# A\nPara one fact.\n\nQ: 光合成が行われる細胞小器官は？\nA: 葉緑体 ^kioku-0123456789\n\n%%kioku-src:kioku-0123456789\nPara one fact.\n%%\n\n## B\nOther section text.\n');
+    // Editing section B after extraction does not touch section A's block.
+    expect(planInsertion('# A\nPara one fact.\n## B\nEdited later.\n', recorded, CARD, fixed).ok).toBe(true);
+    const ruled = 'First part.\n***\nSecond part.\n';
+    expect(planInsertion(ruled, anchorOf(ruled, 'First part.'), CARD, fixed).offset).toBe('First part.'.length);
+    expect(findAnchors('# 見出し\n本文').map((anchor) => anchor.text)).toEqual(['# 見出し', '本文']);
+  });
+
+  it('keeps a setext heading underline with its line', () => {
+    const note = 'Title line\n---\nBody text.\n';
+    expect(findAnchors(note).map((anchor) => anchor.text)).toEqual(['Title line\n---', 'Body text.']);
+  });
+
   it('adds a blank line when non-blank text follows directly, and nothing extra at EOF', () => {
     const fenced = '本文の文。\n```\ncode\n```\n';
     expect(planInsertion(fenced, anchorOf(fenced, '本文の文。'), CARD, fixed).next).toMatch(/\n%%\n\n```\ncode/);

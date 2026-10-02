@@ -19,22 +19,39 @@ export interface Anchor {
 
 const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])[ \t]+/;
 const INDENTED = /^[ \t]+\S/;
+const ATX_HEADING = /^ {0,3}#{1,6}(?:[ \t]|$)/;
+const THEMATIC_BREAK = /^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$/;
+/** `===` / `---` directly under a paragraph line turns it into a setext heading (part of that block). */
+const SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+)[ \t]*$/;
 
 /**
  * Every anchor of the note. A block is a maximal run of non-blank, non-excluded lines (so a table,
- * a `>` quote or callout and a tight list are one block). A loose list (items separated by blank
- * lines) continues across blank lines while the next run starts with a list item or an indented
- * line, so a card is never inserted between two items of one list.
+ * a `>` quote or callout and a tight list are one block). An ATX heading and a thematic break are
+ * blocks of their own and end the run before them, so a card quoted from one section is inserted
+ * before the next heading and edits in another section never change its block; a setext underline
+ * (`===` / `---` right under text) stays with the line it underlines. A loose list (items separated
+ * by blank lines) continues across blank lines while the next run starts with a list item or an
+ * indented line, so a card is never inserted between two items of one list.
  */
 export function findAnchors(text: string): Anchor[] {
   const lines = splitLines(text);
   const kinds = classifyLines(lines);
   const ordinary = (index: number): boolean => kinds[index] === null && !isBlank(lines[index]?.text ?? '');
+  const lineText = (index: number): string => lines[index]?.text ?? '';
+  // A line that stands alone as a block: an ATX heading, or a thematic break that does not underline the line above.
+  const standalone = (index: number, previousInRun: boolean): boolean => ATX_HEADING.test(lineText(index))
+    || (THEMATIC_BREAK.test(lineText(index)) && !(previousInRun && SETEXT_UNDERLINE.test(lineText(index))));
   const runs: Array<{ first: number; last: number }> = [];
   for (let index = 0; index < lines.length; index += 1) {
     if (!ordinary(index)) continue;
     const first = index;
-    while (index + 1 < lines.length && ordinary(index + 1)) index += 1;
+    if (!standalone(index, false)) {
+      while (index + 1 < lines.length && ordinary(index + 1) && !standalone(index + 1, true)) {
+        index += 1;
+        // A setext underline closes its heading block.
+        if (SETEXT_UNDERLINE.test(lineText(index))) break;
+      }
+    }
     runs.push({ first, last: index });
   }
   const merged: Array<{ first: number; last: number }> = [];
