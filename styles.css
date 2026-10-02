@@ -86,3 +86,97 @@
   color: var(--text-muted);
   font-size: var(--font-ui-small);
 }
+
+.kioku-deck-picker-modal {
+  width: min(44rem, 92vw);
+}
+
+.kioku-deck-picker-modal .kioku-deck-allowance {
+  font-weight: var(--font-semibold);
+}
+
+.kioku-deck-picker-modal .kioku-deck-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-2-2);
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.kioku-deck-picker-modal .kioku-deck-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--size-4-2);
+  justify-content: flex-start;
+  height: auto;
+  padding: var(--size-2-3) var(--size-4-2);
+  padding-left: calc(var(--size-4-2) + var(--kioku-deck-depth, 0) * var(--size-4-4));
+  text-align: start;
+  white-space: normal;
+}
+
+.kioku-deck-picker-modal .kioku-deck-name {
+  flex: 1 1 auto;
+  font-weight: var(--font-semibold);
+}
+
+.kioku-deck-picker-modal .kioku-deck-counts,
+.kioku-deck-picker-modal .kioku-deck-later {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.kioku-deck-picker-modal .kioku-deck-notes p,
+.kioku-deck-picker-modal .kioku-deck-loading {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.kioku-deck-picker-modal .kioku-deck-problem {
+  border: 1px solid var(--background-modifier-error);
+  border-radius: var(--radius-m);
+  color: var(--text-error);
+  margin-bottom: var(--size-4-2);
+  padding: var(--size-4-2);
+}
+
+.kioku-deck-picker-modal .kioku-deck-footer,
+.kioku-deck-picker-modal .kioku-review-actions,
+.kioku-deck-picker-modal .kioku-review-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-2);
+  justify-content: flex-end;
+  margin-top: var(--size-4-3);
+}
+
+.kioku-deck-picker-modal .kioku-review:focus {
+  outline: none;
+}
+
+.kioku-deck-picker-modal .kioku-review-header {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.kioku-deck-picker-modal .kioku-review-question,
+.kioku-deck-picker-modal .kioku-review-answer {
+  max-height: 30vh;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  padding: var(--size-4-2) 0;
+}
+
+.kioku-deck-picker-modal .kioku-review-readonly,
+.kioku-deck-picker-modal .kioku-review-message {
+  color: var(--text-warning);
+  font-size: var(--font-ui-small);
+}
+
+.kioku-settings-status {
+  color: var(--text-warning);
+}
