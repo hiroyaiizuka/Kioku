@@ -8,6 +8,11 @@ export const pluginFiles = ['main.js', 'manifest.json', 'styles.css'];
 export const installedFiles = [...pluginFiles, 'build-info.json'];
 export const requiredDocs = ['AGENTS.md', 'README.md', 'docs/product-plan.md', 'docs/architecture.md',
   'docs/harness.md', 'docs/linear-workflow.md', 'docs/development.md', '.claude/skills/review-check/SKILL.md'];
+/** The only runtime dependency (bundled, never external), pinned exactly. See docs/m2-design.md §4.1. */
+export const runtimeDependencies = { 'ts-fsrs': '5.4.2' };
+/** Bundled dependency files that are build inputs (their bytes change the build ID). */
+export const dependencyInputs = ['node_modules/ts-fsrs/package.json', 'node_modules/ts-fsrs/dist/index.mjs',
+  'node_modules/ts-fsrs/LICENSE'];
 export const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 export const readJSON = (root, file) => JSON.parse(safeRead(root, join(root, file)).toString('utf8'));
 
@@ -27,7 +32,19 @@ export function validateMetadata(root) {
       || pkg.version !== manifest.version || versions[manifest.version] !== manifest.minAppVersion) {
     throw new Error('package / manifest / versions mismatch.');
   }
-  if (pkg.dependencies && Object.keys(pkg.dependencies).length) throw new Error('M0 has no runtime dependencies.');
+  if (JSON.stringify(pkg.dependencies ?? {}) !== JSON.stringify(runtimeDependencies)
+      || JSON.stringify(lock.packages?.['']?.dependencies ?? {}) !== JSON.stringify(runtimeDependencies)) {
+    throw new Error(`Runtime dependencies must be exactly ${JSON.stringify(runtimeDependencies)}.`);
+  }
+  for (const [name, version] of Object.entries(runtimeDependencies)) {
+    const locked = lock.packages[`node_modules/${name}`];
+    if (locked?.version !== version || locked.license !== 'MIT' || locked.dev) throw new Error(`Lock resolution mismatch: ${name}`);
+    if (locked.dependencies && Object.keys(locked.dependencies).length) throw new Error(`${name} must not pull runtime dependencies.`);
+    const installed = readJSON(root, `node_modules/${name}/package.json`);
+    if (installed.name !== name || installed.version !== version || installed.license !== 'MIT') {
+      throw new Error(`Installed ${name} is not the pinned MIT ${version}; run npm ci.`);
+    }
+  }
   if (pkg.devDependencies.obsidian !== manifest.minAppVersion) throw new Error('API types must match minAppVersion.');
   const nodeVersion = safeRead(root, join(root, '.nvmrc')).toString('utf8').trim();
   if (nodeVersion !== '22.22.3' || pkg.engines.node !== nodeVersion) throw new Error('Node version mismatch.');
@@ -46,7 +63,7 @@ export function validateMetadata(root) {
 
 export function buildInputs(root) {
   const files = ['manifest.json', 'versions.json', 'styles.css', 'package.json', 'package-lock.json', '.nvmrc',
-    'tsconfig.json', 'scripts/build.mjs', 'scripts/lib/build.mjs', 'scripts/lib/paths.mjs'];
+    'tsconfig.json', 'scripts/build.mjs', 'scripts/lib/build.mjs', 'scripts/lib/paths.mjs', ...dependencyInputs];
   // Dirent classification is checked again by safePath: symlinks must never be treated as input.
   function sourceFiles(directory) {
     safePath(root, join(root, directory), 'directory');
@@ -61,9 +78,19 @@ export function buildInputs(root) {
   return { inputs, buildId: sha256(JSON.stringify(inputs)) };
 }
 
+/** MIT notices of bundled dependencies, kept verbatim at the top of main.js. */
+export function licenseBanner(root) {
+  return Object.entries(runtimeDependencies).map(([name, version]) => {
+    const text = safeRead(root, join(root, 'node_modules', name, 'LICENSE')).toString('utf8').trim();
+    if (!text.startsWith('MIT License') || text.includes('*/')) throw new Error(`Unexpected ${name} license text.`);
+    return `/*!\n * Bundled: ${name} ${version}\n * ${text.split('\n').join('\n * ')}\n */`;
+  }).join('\n');
+}
+
 /** One production recipe for emission and independent, in-memory verification. */
 export function productionBundle(root, manifest, identity) {
   const result = buildSync({
+    banner: { js: licenseBanner(root) },
     absWorkingDir: root,
     entryPoints: ['src/main.ts'],
     outfile: 'dist/kioku/main.js',
@@ -92,7 +119,7 @@ export function verifyDistribution(root, { metadata = true } = {}) {
   const directory = join(root, 'dist', 'kioku');
   safePath(root, directory, 'directory');
   if (JSON.stringify(readdirSync(directory).sort()) !== JSON.stringify([...installedFiles].sort())) {
-    throw new Error('dist/kioku must contain exactly the four M0 distribution files.');
+    throw new Error('dist/kioku must contain exactly the four distribution files.');
   }
   const info = readJSON(root, 'dist/kioku/build-info.json');
   const current = buildInputs(root);
@@ -119,6 +146,9 @@ export function verifyDistribution(root, { metadata = true } = {}) {
   }
   if (JSON.stringify(info.externalImports) !== JSON.stringify(expected.externalImports)) {
     throw new Error('Unexpected runtime imports.');
+  }
+  if (JSON.stringify(info.bundledDependencies) !== JSON.stringify(runtimeDependencies)) {
+    throw new Error('build-info must record exactly the pinned bundled dependencies.');
   }
   files.set('build-info.json', safeRead(root, join(directory, 'build-info.json')));
   return { info, manifest, files };
