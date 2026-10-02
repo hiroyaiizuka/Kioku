@@ -30,6 +30,7 @@ export type RecordResult =
   | { readonly ok: true; readonly stateSaved: boolean }
   | { readonly ok: false; readonly reason: string };
 
+export const STATE_TEMP_FILE = 'state.json.tmp';
 const baseName = (path: string): string => path.slice(path.lastIndexOf('/') + 1);
 
 /** True when `folder` holds Kioku data (state, its backup or a history file). */
@@ -59,8 +60,6 @@ function historyProblem(path: string, parse: HistoryParse): StoreProblem | null 
   if (problem.kind === 'unknown-version') return { kind: 'read-only', message: historyUnknownVersion(path, problem.line, problem.version) };
   return { kind: 'read-only', message: historyCorrupt(path, problem.line) };
 }
-
-export const STATE_TEMP_FILE = 'state.json.tmp';
 
 export class ReviewStore {
   private historyFiles = new Map<string, HistoryParse>();
@@ -123,7 +122,25 @@ export class ReviewStore {
       }
     }
     const files: HistoryFile[] = [...history].map(([name, parse]) => ({ name, parse }));
-    const missing = base ? missingAppliedHistory(base, files) : null;
+    // Without state.json (e.g. a crash between removing it and renaming the temp file), the temp file
+    // or the backup still tells which history was already applied; a vanished file must not be
+    // silently replayed away.
+    let inspection = base;
+    if (!inspection && !names.includes(STATE_FILE)) {
+      for (const candidate of [STATE_TEMP_FILE, STATE_BACKUP_FILE]) {
+        if (!names.includes(candidate)) continue;
+        try {
+          const parsed = parseState(await adapter.read(`${folder}/${candidate}`));
+          if (parsed.kind === 'ok') {
+            inspection = parsed.state;
+            break;
+          }
+        } catch {
+          // An unreadable temp / backup file only loses this extra check.
+        }
+      }
+    }
+    const missing = inspection ? missingAppliedHistory(inspection, files) : null;
     if (missing) problems.push({ kind: 'read-only', message: historyMissing(`${folder}/${missing}`) });
     // With problems the replay is only used for display (counts); nothing is written in that mode.
     // With missing history, state.json itself is the better picture of the schedules.

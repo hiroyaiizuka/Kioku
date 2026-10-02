@@ -368,6 +368,16 @@ describe('review edge cases', () => {
     expect(JSON.parse(adapter.files.get(S)).today).toEqual({ day: '2026-10-02', newIntroduced: 1, extraNew: 10 });
   });
 
+  it('drops an unsaved 今日だけ追加 when the Kioku day changed before the picker reloads', async () => {
+    const { adapter, plugin } = setup({ settings: { newPerDay: 0 } });
+    await startDeck(plugin);
+    document.querySelector('.kioku-review-extra').click(); await settle();
+    vi.setSystemTime(new Date(2026, 9, 3, 9, 0));
+    document.querySelector('.kioku-review-back').click(); await settle();
+    expect(document.querySelector('.kioku-deck-allowance').textContent).toBe('今日の新規 残り 0 枚');
+    expect(adapter.writes()).toEqual([]);
+  });
+
   it('shows how many notes were skipped because they are not indexed yet', async () => {
     const { app, plugin } = setup();
     const getFileCache = app.metadataCache.getFileCache;
@@ -439,6 +449,14 @@ describe('settings tab', () => {
   const tab = (plugin) => { const settingTab = plugin.settingTabs[0]; document.body.append(settingTab.containerEl); settingTab.display(); return settingTab; };
   const field = (name) => [...document.querySelectorAll('.setting-item')].find((item) => item.querySelector('.setting-item-name').textContent === name);
   const input = (element, value) => { element.value = value; element.dispatchEvent(new window.Event('input')); };
+
+  it('reports a failed settings save with a Notice instead of an unhandled rejection', async () => {
+    const { plugin } = setup();
+    plugin.saveData = async () => { throw new Error('EACCES'); };
+    tab(plugin); await settle();
+    input(field('1日の新規カード数').querySelector('input.mock-text'), '30'); await settle();
+    expect(notices).toEqual(['Kioku：設定を保存できませんでした（EACCES）。']);
+  });
 
   it('saves trigger tags, limit, day start, and guards the data folder change', async () => {
     const { adapter, plugin } = setup({ kioku: { [H]: '' , 'Moved/state.json': '{}' } });

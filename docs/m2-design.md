@@ -299,4 +299,5 @@ export interface KiokuSettingsV1 {   // .obsidian/plugins/kioku/data.json (setti
 | 検証の追加 | `CardSchedule` の `dueDay` は `lastReviewDay` より後でなければ不正（ts-fsrs が例外を投げるため）。状態・履歴の先頭の UTF-8 BOM は許容。 | 手で編集されたファイルへの耐性。 |
 | 埋め込みの非表示（拡張） | 答えの表示前は `![` をすべて `[` にし、埋め込み HTML（`<img>`・`<iframe>` 等）を文字にし、コードブロックの info string を外す。 | 参照形式の画像・HTML・dataview 等の renderer でも答えが見えないように（親レビュー）。 |
 | 索引待ちのノート | `getFileCache` が無いノートは数えず、件数を注記する。 | 黙って少なく数えないため。 |
+| 欠落の判定の基準 | `state.json` が無いときは、有効な `state.json.tmp`（無ければ `.bak`）の `applied` で履歴の欠落を判定する（再生の起点には使わない）。 | 削除→rename の間の中断のあとに履歴ファイルが消えていても、黙って空から再生しないため。 |
 

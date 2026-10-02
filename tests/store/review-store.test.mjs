@@ -275,6 +275,28 @@ describe('recording a rating', () => {
     expect(Object.keys(reloaded.state.cards).sort()).toEqual(['kioku-a', 'kioku-b']);
   });
 
+  it('reports an unconfirmed state write when the replaced state.json does not read back', async () => {
+    const adapter = new FakeAdapter({ [H]: lines(A1) });
+    adapter.rename = async () => {}; // claims success, moves nothing
+    const store = await ReviewStore.load(adapter, 'Kioku');
+    expect(await store.record(B1)).toEqual({ ok: true, stateSaved: false });
+  });
+
+  it('still detects a vanished applied history when state.json is gone but state.json.tmp / .bak remain', async () => {
+    const old = { ...stateFrom(lines(A1)), applied: { 'history-2025.jsonl': { lines: 1, lastEventId: A1.eventId } } };
+    for (const leftover of ['Kioku/state.json.tmp', 'Kioku/state.json.bak']) {
+      const adapter = new FakeAdapter({ [leftover]: serializeState(old), [H]: lines(B1) });
+      const store = await ReviewStore.load(adapter, 'Kioku');
+      expect(store.problem).toEqual({ kind: 'read-only', message: expect.stringContaining('Kioku/history-2025.jsonl が見つからないか') });
+      expect((await store.record(event('c', '1'))).ok).toBe(false);
+      expect(adapter.writes()).toEqual([]);
+    }
+    // The temp file wins over the backup when both are valid.
+    const both = new FakeAdapter({ 'Kioku/state.json.tmp': serializeState(stateFrom(lines(B1))),
+      'Kioku/state.json.bak': serializeState(old), [H]: lines(B1) });
+    expect((await ReviewStore.load(both, 'Kioku')).readOnly).toBe(false);
+  });
+
   it('does not replace state.json with a temp file that did not land completely', async () => {
     const before = serializeState(stateFrom(lines(A1)));
     const adapter = new FakeAdapter({ [H]: lines(A1), [S]: before });
