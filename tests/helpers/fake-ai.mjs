@@ -81,14 +81,24 @@ export const json = (value, status = 200, headers = {}) => ({ status, headers, t
 export const chat = (content) => json({ choices: [{ message: { role: 'assistant',
   content: typeof content === 'string' ? content : JSON.stringify(content) } }] });
 
-/** A Jev systemone response with the four Kioku questions. */
-export const jevAnswers = ({ supported = 0.95, answerable = 0.9, oneFact = 0.9, score = 4 } = {}) => json({
-  model: 'jev-latest',
+/**
+ * A Jev systemone response with the four Kioku questions, shaped like the documented examples
+ * (https://docs.typesafe.ai/api.md): noul `{ type, noul }`; score is a probability-weighted,
+ * continuous value over 0-based levels with `legend` / `probabilities` keyed "0", "1", ….
+ */
+export const jevAnswers = ({ supported = 0.95, answerable = 0.9, oneFact = 0.9, quality } = {}) => json({
+  model: 'jev-1.13.0',
   answers: {
-    supported: { noul: supported },
-    answerable: { noul: answerable },
-    one_fact: { noul: oneFact },
-    quality: { score, legend: 'x', probabilities: { 1: 0, 2: 0, 3: 0.1, 4: 0.8, 5: 0.1 }, confidence: 0.8 },
+    supported: { type: 'noul', noul: supported },
+    answerable: { type: 'noul', noul: answerable },
+    one_fact: { type: 'noul', noul: oneFact },
+    quality: quality ?? {
+      type: 'score',
+      score: 3.05,
+      legend: { 0: '役に立たない', 1: '曖昧', 2: '手直しが要る', 3: 'そのまま使える', 4: '要点を問う' },
+      probabilities: { 0: 0, 1: 0, 2: 0.05, 3: 0.85, 4: 0.1 },
+      confidence: 0.92,
+    },
   },
-  usage: { input_tokens: 900 },
+  usage: { input_tokens: 904, output_tokens: 62 },
 });

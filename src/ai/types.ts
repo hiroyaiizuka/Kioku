@@ -8,7 +8,10 @@ export type DecisionQuestion =
 
 /** Shaped like Jev systemone; other providers normalize into it. */
 export interface DecisionResult {
-  /** noul: 0–1, choice: option key, score: level (1-based). */
+  /**
+   * noul: 0–1; choice: option key; score: probability-weighted level, continuous and 0-based
+   * (0 … criteria.length − 1), as Jev returns it (e.g. 1.05).
+   */
   readonly value: number | string;
   readonly probabilities: Readonly<Record<string, number>>;
   /** 0–1. */

@@ -24,7 +24,9 @@ function probabilities(value: unknown): Record<string, number> | null {
 
 /**
  * Normalizes one systemone answer into `DecisionResult` (§5.1): noul gets yes/no probabilities and a
- * derived confidence (Jev returns none for noul); choice and score are passed through.
+ * derived confidence (Jev returns none for noul); choice and score are passed through. A score is
+ * Jev's probability-weighted, continuous value over 0-based levels (`"score": 1.05`, probabilities
+ * keyed "0", "1", …), so any finite 0 ≤ score ≤ criteria.length − 1 is valid.
  */
 export function normalizeJevAnswer(question: DecisionQuestion, answer: unknown): DecisionResult | null {
   if (!isRecord(answer)) return null;
@@ -41,7 +43,7 @@ export function normalizeJevAnswer(question: DecisionQuestion, answer: unknown):
       ? { value: answer.choice, probabilities: probs, confidence } : null;
   }
   const score = answer.score;
-  return finite(score) && Number.isInteger(score) && score >= 1 && score <= question.criteria.length
+  return finite(score) && score >= 0 && score <= question.criteria.length - 1
     ? { value: score, probabilities: probs, confidence } : null;
 }
 
@@ -64,12 +66,14 @@ export function createJevJudge(options: JevOptions): DecisionProvider {
       const body = parseJson(result.response.text);
       const answers = isRecord(body) ? body.answers : null;
       if (!isRecord(answers)) return { ok: false, failure: { kind: 'invalid-response', detail: 'answers がありません' }, ms: ms() };
+      // A malformed answer is left out rather than failing the call: the caller decides what it
+      // needs (e.g. `quality` is only a display-order hint; missing noul answers mean 未判定).
       const value: Record<string, DecisionResult> = {};
       for (const [key, question] of Object.entries(questions)) {
         const normalized = normalizeJevAnswer(question, answers[key]);
-        if (!normalized) return { ok: false, failure: { kind: 'invalid-response', detail: `${key} を読み取れません` }, ms: ms() };
-        value[key] = normalized;
+        if (normalized) value[key] = normalized;
       }
+      if (!Object.keys(value).length) return { ok: false, failure: { kind: 'invalid-response', detail: '答えを読み取れません' }, ms: ms() };
       return { ok: true, value, ms: ms() };
     },
   };

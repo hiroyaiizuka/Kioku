@@ -21,7 +21,7 @@ const CARDS = { cards: [
 const chat = (content) => ({ status: 200, text: JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }) });
 const jev = (supported) => ({ status: 200, text: JSON.stringify({ answers: {
   supported: { noul: supported }, answerable: { noul: 0.9 }, one_fact: { noul: 0.9 },
-  quality: { score: 4, probabilities: { 4: 1 }, confidence: 0.9 } } }) });
+  quality: { type: 'score', score: 3.05, legend: { 0: 'a', 1: 'b', 2: 'c', 3: 'd', 4: 'e' }, probabilities: { 3: 0.95, 4: 0.05 }, confidence: 0.9 } } }) });
 
 let dom;
 let Plugin;

@@ -63,7 +63,7 @@ describe('deterministic checks (§6.1)', () => {
 describe('classification (§6.2)', () => {
   const noul = (value) => ({ value, probabilities: { yes: value, no: 1 - value }, confidence: Math.max(value, 1 - value) });
   const results = (supported, answerable = 0.9, oneFact = 0.9) =>
-    ({ supported: noul(supported), answerable: noul(answerable), one_fact: noul(oneFact), quality: { value: 4, probabilities: {}, confidence: 0.8 } });
+    ({ supported: noul(supported), answerable: noul(answerable), one_fact: noul(oneFact), quality: { value: 3, probabilities: {}, confidence: 0.8 } });
 
   it('recommends only with clean checks and high scores; weak below 0.3; otherwise review with reasons', () => {
     expect(classify(results(0.9), false)).toMatchObject({ verdict: 'recommended', label: '推奨', quality: 4 });

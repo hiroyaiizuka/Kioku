@@ -21,7 +21,10 @@ export interface Judgement {
   readonly label: string;
   /** Why it is not 推奨 (judge part only; check warnings are shown separately). */
   readonly reasons: readonly string[];
-  /** Quality level 1–5 when judged (display order hint only). */
+  /**
+   * Display quality on the 1–5 rubric (= Jev's 0-based weighted score + 1, may be fractional), or
+   * null when not judged or the quality answer was missing / malformed (display-order hint only).
+   */
   readonly quality: number | null;
 }
 
@@ -42,7 +45,8 @@ export function classify(results: Readonly<Record<string, DecisionResult>>, hasW
   const answerable = num(results.answerable);
   const oneFact = num(results.one_fact);
   if (supported === null || answerable === null || oneFact === null) return unjudged('AI の応答が不完全');
-  const quality = num(results.quality);
+  const score = num(results.quality);
+  const quality = score === null ? null : score + 1;
   if (supported < THRESHOLDS.weak) {
     return { verdict: 'weak', label: VERDICT_LABELS.weak, reasons: [`答えが引用から導けない可能性が高い（${percent(supported)}）。`], quality };
   }

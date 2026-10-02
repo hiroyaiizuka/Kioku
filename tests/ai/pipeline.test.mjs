@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { SlotGate } from '../../src/ai/call.ts';
 import { AiRuntime, prepareRun, runPipeline } from '../../src/ai/pipeline.ts';
 import { JUDGE_QUESTIONS } from '../../src/ai/prompts.ts';
-import { JEV_ENDPOINT, createJevJudge } from '../../src/ai/providers/jev.ts';
+import { JEV_ENDPOINT, createJevJudge, normalizeJevAnswer } from '../../src/ai/providers/jev.ts';
+import { classify } from '../../src/ai/classify.ts';
 import { createLocalGenerator, parseGeneration } from '../../src/ai/providers/local.ts';
 import { failureMessage } from '../../src/ai/reasons.ts';
 import { consentFingerprint, parseAiSettings } from '../../src/ai/settings.ts';
@@ -46,7 +47,26 @@ describe('providers', () => {
     expect(body.questions.quality.criteria).toHaveLength(5);
     expect(outcome.ok).toBe(true);
     expect(outcome.value.supported).toEqual({ value: 0.95, probabilities: { yes: 0.95, no: 0.050000000000000044 }, confidence: 0.95 });
-    expect(outcome.value.quality).toMatchObject({ value: 4, confidence: 0.8 });
+    expect(outcome.value.quality).toMatchObject({ value: 3.05, confidence: 0.92, probabilities: { 0: 0, 3: 0.85 } });
+  });
+
+  it('accepts fractional 0-based scores within 0 … levels − 1 and rejects others', () => {
+    const quality = JUDGE_QUESTIONS.quality;
+    const answer = (score) => ({ type: 'score', score, legend: {}, probabilities: { 0: 0.5, 1: 0.5 }, confidence: 0.5 });
+    expect([0, 0.5, 1.05, 3.99, 4].map((score) => normalizeJevAnswer(quality, answer(score))?.value)).toEqual([0, 0.5, 1.05, 3.99, 4]);
+    expect([-0.1, 4.01, Number.NaN, '2'].map((score) => normalizeJevAnswer(quality, answer(score)))).toEqual([null, null, null, null]);
+  });
+
+  it('keeps the noul answers when quality is malformed (quality is only a display hint)', async () => {
+    const http = fakeHttp(() => jevAnswers({ quality: { type: 'score', score: 7, legend: {}, probabilities: {}, confidence: 1 } }));
+    const judge = createJevJudge({ apiKey: KEY, model: 'jev-latest', http, clock: fakeClock(), gate: new SlotGate(4), timeoutMs: 20000 });
+    const outcome = await judge.decide('s', JUDGE_QUESTIONS, new AbortController().signal);
+    expect(outcome.ok).toBe(true);
+    expect(Object.keys(outcome.value)).toEqual(['supported', 'answerable', 'one_fact']);
+    expect(classify(outcome.value, false)).toMatchObject({ verdict: 'recommended', quality: null });
+    const fractional = await createJevJudge({ apiKey: KEY, model: 'jev-latest', http: fakeHttp(() => jevAnswers()), clock: fakeClock(),
+      gate: new SlotGate(4), timeoutMs: 20000 }).decide('s', JUDGE_QUESTIONS, new AbortController().signal);
+    expect(classify(fractional.value, false).quality).toBeCloseTo(4.05);
   });
 
   it('rejects malformed Jev answers as invalid responses', async () => {

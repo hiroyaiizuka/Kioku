@@ -193,7 +193,7 @@ export type DecisionQuestion =
 
 /** Shaped like Jev systemone; other providers normalize into it. */
 export interface DecisionResult {
-  readonly value: number | string;      // noul: 0–1, choice: option, score: level
+  readonly value: number | string;      // noul: 0–1, choice: option, score: weighted 0-based level (continuous, e.g. 1.05)
   readonly probabilities: Readonly<Record<string, number>>;
   readonly confidence: number;          // 0–1
 }
@@ -242,7 +242,7 @@ export interface GeneratorProvider extends ProviderInfo {
   - 接続先が `localhost` / `127.0.0.1` / `::1` 以外（LAN の別 PC など）。
   - Ollama の cloud モデル：モデル名が `:cloud` / `-cloud` で終わる。名前で判別できない場合に備え、接続テストで Ollama の `/api/show` から cloud モデルかを判別できるか試す【要検証】。判別できない・確かめられないモデルは、名前の規則だけで判断し、プライバシー文で注意する。
   - LM Studio / llama.cpp が外部へ中継しているかは Kioku からは分からない。設定画面とプライバシー文で「ローカルのサーバーが別のサービスへ中継する設定なら外部に送られる」と注意する。
-- **Jev の型との対応**：Kioku の `DecisionQuestion` は Jev の question をそのまま写す。応答は次のように `DecisionResult` へ正規化する。`noul`：`value = noul`、`probabilities = { yes: noul, no: 1 - noul }`、`confidence = max(noul, 1 - noul)`（Jev は noul に confidence を返さないため Kioku 側で導く）。`choice`：`value = choice`、`probabilities`・`confidence` はそのまま。`score`：`value = score`、`probabilities`・`confidence` はそのまま（`legend` は表示用に保持）。Clef とローカル判定も同じ形に正規化する。
+- **Jev の型との対応**：Kioku の `DecisionQuestion` は Jev の question をそのまま写す。応答は次のように `DecisionResult` へ正規化する。`noul`：`value = noul`、`probabilities = { yes: noul, no: 1 - noul }`、`confidence = max(noul, 1 - noul)`（Jev は noul に confidence を返さないため Kioku 側で導く）。`choice`：`value = choice`、`probabilities`・`confidence` はそのまま。`score`：Jev の `score` は 0 始まりの段階を確率で重み付けした連続値（例 `1.05`。`legend`・`probabilities` のキーは `"0"`, `"1"`, …）なので、`value = score`（0 ≤ score ≤ 段階数 − 1 の有限値なら小数も受け付ける）、`probabilities`・`confidence` はそのまま。表示上の品質（§6.2 の 1〜5）は `score + 1`。`quality` の答えが壊れていても判定全体は失敗にせず、品質だけ無しとして扱う（表示順の参考にすぎないため）。Clef とローカル判定も同じ形に正規化する。
 
 ### 5.2 provider 一覧
 
@@ -279,7 +279,7 @@ export interface GeneratorProvider extends ProviderInfo {
   - Ollama：OpenAI 互換の `/v1/chat/completions` に `logprobs: true`、`top_logprobs`（≤20）、`max_tokens: 1`、`temperature: 0`。
   - llama.cpp：独自の `/completion` に `n_probs`、`n_predict: 1`、`temperature: 0`（プロンプトはチャットテンプレートを適用した文字列で送る）。
   - LM Studio：`/v1/responses` に `include: ["message.output_text.logprobs"]`、`top_logprobs`、出力 1 トークン（`max_output_tokens: 1` を想定。LM Studio が受け付けるかは【未検証】）。
-- **判定**：§3.3 の作法。`noul` は「A=はい / B=いいえ」の 2 択で `P(A)` を値に、`score` は `1`〜`5` のラベルで最大確率の段階を値（`DecisionResult.value` の「score: level」と同じ）、確率をそのまま probabilities、最大確率を confidence にする（期待値が必要なら probabilities から計算する）。選択肢トークンが上位 logprobs に1つも無い場合は `invalid-response`（未判定）。
+- **判定**：§3.3 の作法。`noul` は「A=はい / B=いいえ」の 2 択で `P(A)` を値に、`score` は `1`〜`5` のラベルの確率を 0 始まりの段階に読み替え、Jev と同じく確率で重み付けした連続値（期待値）を値にする。確率をそのまま probabilities（キーは `"0"`〜`"4"`）、最大確率を confidence にする。選択肢トークンが上位 logprobs に1つも無い場合は `invalid-response`（未判定）。
 - 接続テストで (1) モデル一覧に指定モデルがあるか、(2) 1 トークンの判定で logprobs が返るか、を確かめる。logprobs が返らない（v0.12.11 より古い Ollama、LM Studio の一部 runtime【未検証】など）場合は「このサーバーでは判定に使えません（生成には使えます）」と表示する。
 
 ### 5.6 OpenAI / カスタム（生成）
