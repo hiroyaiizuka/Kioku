@@ -22,6 +22,9 @@ export default defineConfig(
       'obsidianmd/no-nodejs-modules': 'error',
       'obsidianmd/regex-lookbehind': ['error', { isDesktopOnly: false }],
       'no-restricted-imports': ['error', { patterns: ['node:*', 'electron'] }],
+      // getSettingDefinitions() exists only from Obsidian 1.13.0; Kioku's minAppVersion is 1.8.7
+      // (the API types it compiles against have no declarative settings API).
+      'obsidianmd/settings-tab/prefer-setting-definitions': 'off',
     },
   },
   { files: ['**/*.mjs'], extends: [js.configs.recommended], languageOptions: { globals: globals.node } },

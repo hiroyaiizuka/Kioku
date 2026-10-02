@@ -1,6 +1,9 @@
 import { Plugin, TFile, type Modal } from 'obsidian';
+import { SettingsStore } from './store/settings';
 import { extractFromActiveNote, extractFromFile, hasActiveNote, type ModalTracker } from './ui/extract';
 import { CandidateModal } from './ui/candidate-modal';
+import { DeckPickerModal } from './ui/deck-picker-modal';
+import { KiokuSettingTab } from './ui/settings-tab';
 import { StartupModal } from './ui/startup-modal';
 
 export default class KiokuPlugin extends Plugin {
@@ -9,20 +12,33 @@ export default class KiokuPlugin extends Plugin {
 
   override onload(): void {
     const tracker: ModalTracker = { add: (modal) => this.openModals.add(modal), delete: (modal) => this.openModals.delete(modal) };
+    const identity = { version: __KIOKU_VERSION__, buildId: __KIOKU_BUILD_ID__ };
+    // Settings are read from data.json on first use, never during startup.
+    const settings = new SettingsStore(() => this.loadData(), (data) => this.saveData(data));
     const extract = (): void => extractFromActiveNote(this.app, tracker);
-    const openStartup = (): void => {
-      this.startupModal ??= new StartupModal(this.app, {
-        version: __KIOKU_VERSION__,
-        buildId: __KIOKU_BUILD_ID__,
-      }, extract);
+    const openStatus = (): void => {
+      this.startupModal ??= new StartupModal(this.app, identity, extract);
       this.startupModal.open();
     };
-    const ribbon = this.addRibbonIcon('gallery-vertical-end', 'フラッシュカード', openStartup);
+    const openDeckPicker = (): void => {
+      const modal: DeckPickerModal = new DeckPickerModal(this.app, {
+        identity, settings: () => settings.get(), openStatus, extract, now: () => new Date(),
+        onClosed: () => tracker.delete(modal),
+      });
+      tracker.add(modal);
+      modal.open();
+    };
+    const ribbon = this.addRibbonIcon('gallery-vertical-end', 'フラッシュカード', openDeckPicker);
     ribbon.addClass('kioku-ribbon');
+    this.addCommand({
+      id: 'open-review',
+      name: 'デッキを選んで復習',
+      callback: openDeckPicker,
+    });
     this.addCommand({
       id: 'open-startup',
       name: 'フラッシュカード（状態）',
-      callback: openStartup,
+      callback: openStatus,
     });
     this.addCommand({
       id: 'extract-explicit-qa',
@@ -38,6 +54,7 @@ export default class KiokuPlugin extends Plugin {
       menu.addItem((item) => item.setTitle('Kioku：問い・答えの候補を抽出').setIcon('gallery-vertical-end')
         .onClick(() => { void extractFromFile(this.app, file, tracker); }));
     }));
+    this.addSettingTab(new KiokuSettingTab(this.app, this, settings));
   }
 
   override onunload(): void {

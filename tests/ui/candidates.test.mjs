@@ -69,13 +69,13 @@ describe('extraction popup', () => {
   it('is unavailable without an active Markdown note', () => {
     const app = createApp(); const plugin = new Plugin(app); plugin.onload();
     expect(extractCommand(plugin).checkCallback(true)).toBe(false);
-    plugin.commands[0].callback(); document.querySelector('.kioku-startup-extract').click();
+    plugin.commands.find((command) => command.id === 'open-startup').callback(); document.querySelector('.kioku-startup-extract').click();
     expect(notices).toEqual(['Kioku：Markdown ノートを開いてから実行してください。']);
   });
 
   it('opens from the status popup button as well', () => {
     const { plugin } = openNote();
-    plugin.ribbons[0].click(); document.querySelector('.kioku-startup-extract').click();
+    plugin.commands.find((command) => command.id === 'open-startup').callback(); document.querySelector('.kioku-startup-extract').click();
     expect(document.querySelector('.kioku-startup-modal')).toBeNull();
     expect(items()).toHaveLength(2);
   });

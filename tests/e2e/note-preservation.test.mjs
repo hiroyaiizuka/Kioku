@@ -16,8 +16,9 @@ function frame(text) {
   const head = data.length < 126 ? Buffer.from([0x81, data.length]) : Buffer.from([0x81, 126, data.length >>> 8, data.length & 255]);
   return Buffer.concat([head, data]);
 }
+/** `foreignModal`: false, true (open from the start) or 'after-first-close' (stacked over the second deck picker). */
 async function simulatedSmoke(root, expected, baselineId, mutateAt, baselineMode = false, foreignModal = false) {
-  let modalCount = 0; let closes = 0;
+  let modalCount = 0; let closes = 0; let kiokuModal = '';
   const sockets = new Set();
   const server = createServer((_req, res) => {
     res.setHeader('content-type', 'application/json');
@@ -48,18 +49,24 @@ async function simulatedSmoke(root, expected, baselineId, mutateAt, baselineMode
         if (message.method === 'Runtime.evaluate') {
           const expression = message.params.expression; let value;
           if (expression.includes("'.modal-container'")) {
-            value = foreignModal ? [{ kioku: false, classes: 'modal mod-lg mod-trust-folder' }] : [];
+            const foreign = foreignModal === true || (foreignModal === 'after-first-close' && closes >= 1);
+            value = [...(modalCount ? [{ kioku: true, classes: `modal ${kiokuModal}` }] : []),
+              ...(foreign ? [{ kioku: false, classes: 'modal mod-lg mod-trust-folder' }] : [])];
           } else if (expression.includes("require?.('obsidian')")) {
             result = { exceptionDetails: { text: "Cannot find module 'obsidian'" } };
           } else if (expression.includes('versions?.electron')) value = { vault: expected.vault,
             url: popout ? 'about:blank' : 'app://obsidian.md/index.html', processType: 'renderer', electron: '43.3.0' };
-          else if (expression.includes('getBoundingClientRect')) value = { count: 1, text: 'Kioku M1 デッキ・復習・AI は未実装', ...expected,
-            x: 300, y: 200, width: 400, height: 300, viewportWidth: 1000, viewportHeight: 700 };
+          else if (expression.includes('getBoundingClientRect')) {
+            value = { count: 1, buildId: expected.buildId, version: expected.version, loaded: true,
+              text: expression.includes('kioku-deck-picker-modal') ? 'Kioku — デッキを選んで復習 全デッキ' : 'Kioku デッキ AI は未実装',
+              x: 300, y: 200, width: 400, height: 300, viewportWidth: 1000, viewportHeight: 700 };
+          } else if (expression.includes('executeCommandById')) { modalCount = 1; kiokuModal = 'kioku-startup-modal'; value = true; }
           else if (expression.includes('?.click()')) {
-            if (expression.includes('kioku-startup-close')) {
+            if (expression.includes('-close')) {
               modalCount = 0; closes += 1;
               if (mutateAt === 'close' && closes === 1) writeFileSync(join(expected.vault, 'Welcome.md'), 'MUTATED ON CLOSE\n');
-            } else modalCount = 1;
+              if (mutateAt === 'kioku-folder' && closes === 1) mkdirSync(join(expected.vault, 'Kioku'));
+            } else { modalCount = 1; kiokuModal = 'kioku-deck-picker-modal'; }
             value = true;
           } else if (expression.includes('kioku-ribbon')) value = 1;
           else value = modalCount;
@@ -111,6 +118,13 @@ describe('real smoke CLI note preservation using non-UI CDP simulation', () => {
     const report = JSON.parse(result.stdout);
     expect(report.status).toBe('FAIL'); expect(report.steps).toEqual([]);
   });
+  it('fails when a foreign modal is stacked over the open deck picker', async () => {
+    const { root, expected, id } = setup();
+    const result = await simulatedSmoke(root, expected, id, undefined, false, 'after-first-close');
+    expect(result.status).toBe(1); expect(result.stderr).toMatch(/Unexpected foreign modal open.*mod-trust-folder/);
+    const report = JSON.parse(result.stdout);
+    expect(report.status).toBe('FAIL'); expect(report.steps.map((step) => step.operation)).toEqual(['ribbon → deck picker → close (1)']);
+  });
   it('fails before any UI operation when the CDP port is not the recorded dedicated instance port', async () => {
     const { root, expected, id } = setup();
     mkdirSync(join(root, '.tooling'));
@@ -124,6 +138,12 @@ describe('real smoke CLI note preservation using non-UI CDP simulation', () => {
   it('refuses UI PASS without a pre-startup baseline ID', async () => {
     const { root, expected } = setup(); const result = await simulatedSmoke(root, expected, '');
     expect(result.status).toBe(1); expect(result.stderr).toMatch(/KIOKU_BASELINE_ID/);
+  });
+  it('fails instead of PASS when opening the deck picker creates the (even empty) review data folder', async () => {
+    const { root, expected, id } = setup();
+    const result = await simulatedSmoke(root, expected, id, 'kioku-folder');
+    expect(result.status, result.stdout).toBe(1);
+    expect(result.stderr).toMatch(/Review data folder was created without a rating: Kioku/);
   });
   for (const stage of ['startup', 'close', 'restart']) {
     it(`fails instead of PASS when a note changes at ${stage}`, async () => {

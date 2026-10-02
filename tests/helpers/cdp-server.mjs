@@ -61,7 +61,6 @@ export function fakeDocument(containers) {
     classList: classes,
     querySelector(selector) {
       if (selector === '.modal') return { classList: [...classes] };
-      if (selector === '.kioku-startup-modal') return classes.includes('kioku-startup-modal') ? {} : null;
       throw new Error(`Unsupported selector in fake container: ${selector}`);
     },
   });

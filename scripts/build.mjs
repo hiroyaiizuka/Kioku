@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { buildInputs, productionBundle, sha256, validateMetadata } from './lib/build.mjs';
+import { buildInputs, productionBundle, runtimeDependencies, sha256, validateMetadata } from './lib/build.mjs';
 import { atomicWrite, ensureDirectory, projectRoot, safePath, safeRead } from './lib/paths.mjs';
 
 const root = projectRoot();
@@ -20,6 +20,7 @@ const files = new Map([
 const info = {
   schema: 1, id: 'kioku', version: manifest.version, mode: 'production', ...identity,
   files: Object.fromEntries([...files].map(([name, bytes]) => [name, sha256(bytes)])), externalImports,
+  bundledDependencies: runtimeDependencies,
 };
 for (const [name, bytes] of files) atomicWrite(root, join(output, name), bytes);
 atomicWrite(root, join(output, 'build-info.json'), `${JSON.stringify(info, null, 2)}\n`);
