@@ -1,6 +1,6 @@
 # M3（LEV-277）設計：AI による候補の判定と生成
 
-> **状態：設計案・実装前。** この文書は LEV-277 について 2026-10-02 に利用者が決めたこと（§1）と、それに沿った設計案をまとめたもの。§2 の「利用者に確認したいこと」は未決定で、決まるまで実装しない。**M3 のコードはまだ無く、AI による候補作成・判定は使えない。** 「瞬時」という表現は §11 の実測が終わるまで使わない。
+> **状態：設計案・実装前。** この文書は LEV-277 について 2026-10-02 に利用者が決めたこと（§1）と、それに沿った設計案をまとめたもの。§2 の「利用者に確認したいこと」は未決定で、決まるまで実装しない（§2.1 は設計判断として決めた項目）。**M3 のコードはまだ無く、AI による候補作成・判定は使えない。** 「瞬時」という表現は §11 の実測が終わるまで使わない。
 >
 > 前提：main の M1（LEV-275）と M2（LEV-276、実装済み・実機確認前）。M1 の候補ポップアップ（`src/ui/candidate-modal.ts`）、採用時だけの書き込み、原文照合・Canvas ガード・ディスク確認（3 秒 settle / 6 秒 deadline）・1回だけの回復（`docs/architecture.md`「書き込み経路」）をそのまま土台にする。採用されたカードは M1 と同じ `^kioku-<id>` 付きの Q/A ブロックになり、M2 のデッキ・復習にそのまま入る。
 
@@ -47,13 +47,23 @@
 
 | # | 確認したいこと | 推奨 | 理由 |
 | --- | --- | --- | --- |
-| Q1 | **既定の Generator provider** | **ローカルの OpenAI 互換（Ollama）を既定**にし、モデル名は固定せず、§11 の実測で日本語の品質と遅延が良かった 1〜2 個を README で推奨する。外部の OpenAI/カスタムは同意した場合だけの選択肢。 | S1（ローカル優先）と一致し、追加費用がない。Ollama は logprobs（v0.12.11+）にも対応するので、同じサーバーでローカル判定もできる。ただし PC の性能で遅延が大きく変わるため、「瞬時」は実測後に判断する。 |
+| Q1 | **既定の Generator provider** | **ローカルの OpenAI 互換（Ollama）を既定**にし、モデル名は固定せず、§11 の実測で日本語の品質と遅延が良かった 1〜2 個を README で推奨する。外部の OpenAI/カスタムは同意した場合だけの選択肢。 | S1（ローカル優先）と一致し、追加費用がない。Ollama は OpenAI 互換の chat で logprobs（v0.12.11+）にも対応するので、同じサーバーでローカル判定もできる。ただし PC の性能で遅延が大きく変わるため、「瞬時」は実測後に判断する。 |
 | Q2 | **生成カードをノートのどこに保存するか** | **(A) 引用元のブロック（段落・箇条書き）の直後**に、M1 と同じ形の `Q:`/`A:` ブロック＋ `^kioku-<id>` と、引用の記録 `%%kioku-src:<card-id> … %%` を挿入する。代案 (B) ノート末尾の `## Kioku` 見出しの下にまとめる、(C) 別ノートに保存。 | (A) は根拠の近くにカードがあり、原文の移動・編集と一緒に動き、採用時の原文照合も局所的にできる。(B) は本文を乱さないが、見出しを足して構造を変え、引用元から離れる。(C) は元メモ内に保存する M1 の方針（製品計画）と合わない。 |
 | Q3 | **「瞬時」の目標値** | 2,000 字程度の日本語1ページで、**最初の候補の表示まで p50 ≤ 3 秒、全候補（判定込み）p95 ≤ 10 秒**を目標とし、満たした provider の組だけを「瞬時」と報告する。 | 受入条件が実測を求めている。数値の合意がないと「瞬時」と言えるかを判断できない。 |
 | Q4 | **Jev の日本語精度が実測で基準に届かない場合** | 既定の判定 provider を Jev のままにし、設定画面と README に実測値と「日本語では精度が下がる」注記を出す。基準（§11.3）を大きく下回る場合は、既定を Clef またはローカル判定へ変えることを利用者に再確認する。 | Jev は主に英語で学習され CJK の精度は低いと公式が述べている。既定は利用者決定なので、変更は実測を見てから利用者が決める。 |
-| Q5 | **API キーの保存先** | M3 は**プラグインの `data.json` に保存**し、§7.3 のリスクを設定画面と README に明記する。Obsidian の秘密情報保存 API【未検証】が `minAppVersion` を上げずに使えると確認できたら、そちらへ移すかを再確認する。 | 公開 API だけで確実に動く方法が `data.json`。秘密情報 API は対応版・挙動を未確認で、`minAppVersion`（1.8.7）を上げる判断が要る。 |
-| Q6 | **AI が「根拠が弱い」と判定した候補の見せ方** | 削除せず、一覧の末尾に折りたたんで「AI が根拠が弱いと判定（N 件）」と表示し、開けば採用もできる。 | 判定は確率で、日本語では誤りもある。AI 判定で黙って捨てない。決定的な引用不一致（§6.1）だけは捨てる。 |
-| Q7 | **1回で送る量の上限と費用の表示** | 1回はノート1つ（選択範囲があればそこだけ）、本文 8,000 字を超えたら範囲の選択を求める。外部 provider では送信前に「送信先・文字数・概算費用」を表示する。 | 遅延と費用を予測可能にし、意図しない大量送信を防ぐ。上限値は実測で調整する。 |
+| Q5 | **API キーの保存先**：(a) `minAppVersion` 1.8.7 のまま、プラグインの `data.json` に平文で保存する／(b) `minAppVersion` を 1.11.4 以上に上げ、Obsidian の SecretStorage（`app.secretStorage`）に保存する | **(a)** を M3 の既定とし、§7.3 のリスクを設定画面と README に明記する。(b) は対応版の確認（§3.4）が済んだら改めて判断する。 | (a) は現在の対応範囲（1.8.7 以上）を狭めない。(b) はキーが Vault のファイルに残らず同期・Git に乗らないが、古い Obsidian を切り捨てる判断が要る。 |
+| Q6 | **Ollama の cloud モデル**（名前が `:cloud` / `-cloud` で終わるもの。`localhost:11434` 経由でも ollama.com 上で実行される） | **外部送信の同意があるときだけ使える**ようにし、設定とポップアップで「外部」と表示する（§5.1、§7）。 | 拒否すると cloud モデルを使いたい利用者の選択肢を奪う。同意つきで許すのが S1（既定 OFF・同意後のみ）と整合する。 |
+| Q7 | **ノート名（タイトル）を AI に送るか** | **送らない**（既定）。本文だけを送る。 | タイトルは個人的な情報を含み得る。送ると品質が上がるかは §11 で測れるが、プライバシーの判断なので利用者が決める。送る場合はプライバシー文に書く。 |
+| Q8 | **判定 provider（既定 Jev）が未設定・未同意のまま生成だけ設定されている場合** | **生成は進め**、候補を「未判定（Jev 未設定）」と表示する。設定の判定 provider に「判定なし（決定的検査だけ）」も用意する（§5.2）。 | Ollama だけを設定した利用者が、Jev を設定するまで何も作れないのを避ける。未判定であることは表示で分かる。 |
+
+### 2.1 設計で決めたこと（エンジニアリング判断）
+
+設計判断として決めた項目（利用者への確認は不要と判断）。値と理由を固定し、§11 の実測で必要なら見直す。
+
+| # | 決めたこと | 理由 |
+| --- | --- | --- |
+| E1 | **AI が「根拠が弱い」と判定した候補**は削除せず、一覧の末尾に折りたたんで「AI が根拠が弱いと判定（N 件）」と表示し、開けば採用もできる。 | 判定は確率で、日本語では誤りもある。AI 判定で黙って捨てない。捨てるのは決定的な引用不一致（§6.1）だけ。 |
+| E2 | **1回の送信量**は、ノート1つ（選択範囲があればそこだけ）で本文 8,000 字まで（初期値。§11 の実測で調整）。超えたら範囲の選択を求める。外部に送るたびに、送信前に「送信先・文字数・概算費用」を表示し、「送信して作る」を押すまで送らない（S1 の同意の流れの一部）。 | 遅延と費用を予測可能にし、意図しない大量送信を防ぐ。 |
 
 ## 3. 調査で確認した事実（出典）
 
@@ -64,39 +74,53 @@
 | 事実 | 出典 |
 | --- | --- |
 | 一般の新規登録が 2026-09-27/28 に再開。新規ユーザーへの $5 クレジットは停止中で、無料枠はない。 | [AI Front Page](https://aifront-page.com/typesafe-ai-reopens-jev-sign-ups-free-credit-suspended/) |
-| API キーは `console.typesafe.ai/keys` で発行。OpenRouter（`typesafe/jev-1.13`）と Vercel AI Gateway からも使える。 | [Quickstart](https://docs.typesafe.ai/introduction/quickstart.md), [OpenRouter](https://openrouter.ai/docs/guides/community/jev) |
+| API キーは `console.typesafe.ai/keys` で発行。OpenRouter からも使える（`typesafe/jev-1.13`、別名 `~typesafe/jev-latest`）。 | [Quickstart](https://docs.typesafe.ai/introduction/quickstart.md), [OpenRouter](https://openrouter.ai/docs/guides/community/jev) |
 | 料金：入力 $0.042 / 100 万トークン、出力は無料。 | [Models](https://docs.typesafe.ai/models.md) |
 | `POST https://api.typesafe.ai/v1/systemone`、Bearer 認証。本文 `{ model: "jev-latest", state, questions: { <key>: { type, instructions, criteria? } } }`。 | [API](https://docs.typesafe.ai/api.md) |
-| 型：`noul`（0〜1 の値）、`choice`（選択肢 ≤255、確率と confidence）、`score`（2〜10 段階）。 | [API](https://docs.typesafe.ai/api.md) |
+| 型：`noul`（0〜1 の値）、`choice`（必須の `criteria` に選択肢の map、≤255）、`score`（必須の `criteria` に 2〜10 段階の rubric 配列）。 | [API](https://docs.typesafe.ai/api.md) |
+| 応答：`{ model, answers: { <key>: … }, usage }`。`noul` は `{ "noul": 0.95 }`、`choice` は `choice` / `probabilities` / `confidence`、`score` は `score` / `legend` / `probabilities` / `confidence`。 | [API](https://docs.typesafe.ai/api.md) |
 | エラー：401（認証）、422（不正なリクエスト）、429（レート制限。バックオフする）、529（過負荷）。 | [API](https://docs.typesafe.ai/api.md) |
-| 上限：1リクエスト 64k トークン（state と最も長い question の合計は ≤32k）、40 リクエスト/秒。 | [API](https://docs.typesafe.ai/api.md) |
+| 上限：コンテキスト 64k トークン、40 リクエスト/秒、100K トークン/秒。 | [Models](https://docs.typesafe.ai/models.md) |
 | 主に英語で学習され、CJK の精度は低い（要検証と明記）。 | [Models](https://docs.typesafe.ai/models.md) |
 | 利用者データで学習しない。DPA あり。ゼロデータ保持（ZDR）は営業経由。 | [Legal](https://docs.typesafe.ai/legal.md) |
 
-【未検証】クレジット不足時の HTTP status と本文、応答の正確な JSON 形（`value` / `probabilities` / `confidence` の位置）、`criteria` の効き方、日本語の state・instructions での精度。いずれも §11 の実測と単体テストの fixture 作成時に確かめる。
+【未検証】「state と最も長い question の合計は ≤32k トークン」という制約（調査メモにあったが api.md / models.md には見当たらない）、クレジット不足時の HTTP status と本文、`criteria` の効き方、日本語の state・instructions での精度。いずれも §11 の実測と単体テストの fixture 作成時に確かめる。
 
 ### 3.2 Clef（Cloudflare）
 
 | 事実 | 出典 |
 | --- | --- |
 | `Cloudflare/clef`（27B）と `clef-flash`（9B）、Apache-2.0。typed decision（bool / choice / score を logits で返す）。 | [Hugging Face](https://huggingface.co/Cloudflare/clef), [Cloudflare blog](https://blog.cloudflare.com/clef-decision-models/) |
-| Workers AI で `@cf/cloudflare/clef` / `@cf/cloudflare/clef-flash` として提供（2026-10-01）。 | [Changelog](https://developers.cloudflare.com/changelog/post/2026-10-01-clef-workers-ai/) |
-| Workers AI はアカウントごとに 1 日 10,000 Neurons まで無料。 | [Pricing](https://developers.cloudflare.com/workers-ai/platform/pricing/) |
+| Workers AI で `@cf/cloudflare/clef` / `@cf/cloudflare/clef-flash` として提供（2026-10-01）。1リクエストに typed question 最大 64 個、コンテキスト 64K。clef-flash の中央値は 38.8 ms（「Jev より 13 倍速い」と記載）。 | [Changelog](https://developers.cloudflare.com/changelog/post/2026-10-01-clef-workers-ai/) |
+| Workers AI はアカウントごとに 1 日 10,000 Neurons まで無料。clef-flash は入力 100 万トークンあたり 8,182 Neurons（$0.090）、clef は 21,818 Neurons（$0.240）。無料枠は入力換算で約 122 万トークン/日（clef-flash）、約 46 万トークン/日（clef）。 | [Pricing](https://developers.cloudflare.com/workers-ai/platform/pricing/) |
 | ローカル実行は現実的でない（サイズ）。日本語の性能は不明。 | [Hugging Face](https://huggingface.co/Cloudflare/clef) |
 
-【未検証】Workers AI REST での入力・出力スキーマ、1 判定あたりの Neurons 消費、日本語での精度、エラー status。
+【未検証】Workers AI REST での入力・出力スキーマ、日本語のトークン数（1 判定あたりの実際の Neurons）、日本語での精度、エラー status。
 
-### 3.3 ローカルの OpenAI 互換サーバーで logprobs による判定
+### 3.3 ローカルサーバーで logprobs による判定
 
 | 事実 | 出典 |
 | --- | --- |
-| Ollama v0.12.11 から logprobs に対応（`top_logprobs` ≤20）。 | [Ollama v0.12.11](https://newreleases.io/project/github/ollama/ollama/release/v0.12.11) |
-| llama.cpp server は `n_probs` で上位トークンの確率を返す。 | [llama.cpp server README](https://raw.githubusercontent.com/ggml-org/llama.cpp/master/tools/server/README.md) |
-| LM Studio は `/v1/responses` で `top_logprobs` を返す（MLX runtime では非対応）。 | [LM Studio blog](https://lmstudio.ai/blog/openresponses) |
+| Ollama は v0.12.11 から OpenAI 互換の chat completions で logprobs に対応。`top_logprobs` は最大 20。 | [Ollama v0.12.11](https://newreleases.io/project/github/ollama/ollama/release/v0.12.11), [ollama/ollama#18590](https://github.com/ollama/ollama/issues/18590) |
+| llama.cpp server は独自の `/completion` で `n_probs` を指定すると上位トークンの確率を返す。 | [llama.cpp server README](https://raw.githubusercontent.com/ggml-org/llama.cpp/master/tools/server/README.md) |
+| LM Studio は `/v1/responses` で logprobs を返す（0.3.39、`include: ["message.output_text.logprobs"]` と `top_logprobs`）。 | [LM Studio blog](https://lmstudio.ai/blog/openresponses) |
+
+「OpenAI 互換」でも logprobs の取り方はサーバーごとに違う。そのためローカル判定は**サーバー種別ごとに別の endpoint** を使う（§5.5）。
 
 判定の作法（上記の仕様から導いた設計）：選択肢を 1 トークンの ASCII ラベル（`A` / `B`、`1`〜`5`）にし、`max_tokens: 1`、`temperature: 0` で上位の logprobs を取り、選択肢のトークンだけで確率を正規化する。
 
-【未検証】日本語モデルのトークナイザで ASCII ラベルが 1 トークンになるか（モデルごとに確認）、各サーバーの JSON schema 出力（`response_format` / `format`）の対応。
+【未検証】LM Studio の MLX runtime で logprobs が返らないこと（調査メモにあったが上記の blog には記載がない）、llama.cpp の OpenAI 互換 endpoint で logprobs が返るか、日本語モデルのトークナイザで ASCII ラベルが 1 トークンになるか（モデルごとに確認）、各サーバーの JSON schema 出力（`response_format` / `format`）の対応。
+
+### 3.4 Ollama の cloud モデルと Obsidian の SecretStorage
+
+| 事実 | 出典 |
+| --- | --- |
+| Ollama の cloud モデル（名前が `:cloud` / `-cloud` で終わるもの。例 `gpt-oss:20b-cloud`）は、ローカルの `localhost:11434` 経由で呼んでも ollama.com 上で実行される。LM Studio や llama.cpp も、設定や前段のプロキシによっては外部へ中継し得る。 | 出典未記入（2026-10-02 のレビューでの指摘）。【要検証】Ollama の公式ドキュメント（Cloud のページ）で出典を確かめて記入し、命名規則と、`/api/show` で cloud モデルを判別できるかを確かめる。 |
+| Obsidian の SecretStorage（`app.secretStorage.getSecret` / `setSecret`）。秘密情報を Vault に結び付けたローカルストレージに保存し、Vault のファイルには書かない。1.11.4 から使える。 | Obsidian Developer Docs「Store secrets」（API と保存先）。対応版 1.11.4 は第三者の解説記事による（公式の記載で再確認する）。 |
+
+### 3.5 Obsidian の `requestUrl`
+
+`RequestUrlParam`（obsidian 1.8.7 の `obsidian.d.ts`）は `url` / `method` / `contentType` / `body` / `headers` / `throw` だけを持ち、中断（AbortSignal）とタイムアウトの指定がない。
 
 ## 4. 処理の流れ
 
@@ -118,9 +142,10 @@
 
 - 起動時・設定タブを開いただけ・候補ポップアップを開いただけでは、ネットワークに触れない。通信するのは「AI で候補を作る」ボタン（とポップアップ内の「再判定」）と、設定タブの「接続テスト」ボタンを押したときだけ。
 - ノートの読み取りは M1 と同じ（編集中ビューがあれば editor、無ければファイル。Reading view の選択範囲は使わない）。書き込みは採用時だけ。
-- **要約の段階**：Generator にはまず本文から「1つの事実＋それを支える原文の引用」の列（要約）を作らせ、各事実から問い・答えを作らせる。M3 では 1 回の呼び出しで JSON（§5.2 の `GeneratedCandidate[]`）として返させ、2 回に分けた方が品質が良いと §11 で分かれば分ける。
+- **要約の段階**：Generator にはまず本文から「1つの事実＋それを支える原文の引用」の列（要約）を作らせ、各事実から問い・答えを作らせる。M3 では 1 回の呼び出しで JSON（§5.1 の `GeneratedCandidate[]`）として返させ、2 回に分けた方が品質が良いと §11 で分かれば分ける。
 - **枚数**：プロンプトでも検査でも枚数を固定しない。「根拠のある事実がなければ 0 件でよい」と明示し、上限は誤動作の歯止めとして 1 ページ 20 件だけ置く（超えた分は捨てて件数を表示）。
 - **送る本文の作り方**：M1 の `classifyLines` が除外するのは行単位の領域だけで、1行の中で閉じる `%%…%%`・`<!--…-->`・`$$…$$` は普通の行として残る。外部に送らないと約束するため、送る前に除外領域の行（`kind !== null`）を取り除き、残りの行からも行内の `%%…%%` と `<!--…-->` を取り除く（インラインコードは学習内容になり得るので残す）。取り除いた位置は元の offset への対応表で管理する。
+- **送らないもの**：ノート名（タイトル）は既定で送らない（Q7）。ファイルパス・Vault 名も送らない（§7.1）。
 - 明示 Q/A（M1）は AI の有無にかかわらず従来どおり出し、決定的検査の重複・長さの注意を付ける。明示 Q/A には AI 判定を既定では走らせない（人が書いたものなので。後続で選択可能にする余地は残す）。
 
 ## 5. Provider
@@ -133,13 +158,13 @@
 // src/ai/types.ts
 export type DecisionType = 'noul' | 'choice' | 'score';
 
-export interface DecisionQuestion {
-  readonly type: DecisionType;
-  readonly instructions: string;
-  readonly criteria?: string;
-  readonly options?: readonly string[]; // choice only (≤255)
-  readonly levels?: number;             // score only (2–10)
-}
+/** Mirrors Jev systemone question types (§3.1). */
+export type DecisionQuestion =
+  | { readonly type: 'noul'; readonly instructions: string }
+  | { readonly type: 'choice'; readonly instructions: string;
+      readonly criteria: Readonly<Record<string, string>> }  // option key → description, ≤255
+  | { readonly type: 'score'; readonly instructions: string;
+      readonly criteria: readonly string[] };                // rubric, 2–10 levels, lowest first
 
 /** Shaped like Jev systemone; other providers normalize into it. */
 export interface DecisionResult {
@@ -159,7 +184,7 @@ export type ProviderOutcome<T> = { readonly ok: true; readonly value: T; readonl
 export interface ProviderInfo {
   readonly id: 'deterministic' | 'jev' | 'clef' | 'local' | 'openai' | 'custom';
   readonly label: string;
-  readonly external: boolean;           // true unless the endpoint host is loopback
+  readonly external: boolean;           // non-loopback endpoint, or a cloud model (§5.1 note)
   readonly endpointHost: string;        // shown in consent and run header
 }
 
@@ -169,7 +194,7 @@ export interface DecisionProvider extends ProviderInfo {
 }
 
 export interface GenerationInput {
-  readonly noteName: string;
+  readonly noteTitle: string | null;    // null unless the user opts in (Q7); default null
   readonly source: string;              // excluded regions already removed
   readonly language: 'ja' | 'auto';
   readonly maxCandidates: number;       // safety cap only (20), never a target
@@ -189,44 +214,53 @@ export interface GeneratorProvider extends ProviderInfo {
 
 - 例外は provider の外へ投げず、すべて `ProviderOutcome` に変換する（UI が理由を出し分けるため）。
 - provider は設定から作る factory で生成し、未設定・未同意なら `unconfigured` / `consent-required` を返すだけで通信しない。
-- `external` は provider の種類でなく**接続先**で決める。`local` でも接続先が `localhost` / `127.0.0.1` / `::1` 以外（LAN の別 PC など）なら外部扱いで同意が要る。
+- `external` は provider の種類でなく**接続先とモデル**で決める。次のどれかに当たれば外部扱いで同意が要る（cloud モデルの扱いは Q6 の推奨案。Q6 で「拒否」に決まれば、cloud モデルは選べなくする）。
+  - 接続先が `localhost` / `127.0.0.1` / `::1` 以外（LAN の別 PC など）。
+  - Ollama の cloud モデル：モデル名が `:cloud` / `-cloud` で終わる。名前で判別できない場合に備え、接続テストで Ollama の `/api/show` から cloud モデルかを判別できるか試す【要検証】。判別できない・確かめられないモデルは、名前の規則だけで判断し、プライバシー文で注意する。
+  - LM Studio / llama.cpp が外部へ中継しているかは Kioku からは分からない。設定画面とプライバシー文で「ローカルのサーバーが別のサービスへ中継する設定なら外部に送られる」と注意する。
+- **Jev の型との対応**：Kioku の `DecisionQuestion` は Jev の question をそのまま写す。応答は次のように `DecisionResult` へ正規化する。`noul`：`value = noul`、`probabilities = { yes: noul, no: 1 - noul }`、`confidence = max(noul, 1 - noul)`（Jev は noul に confidence を返さないため Kioku 側で導く）。`choice`：`value = choice`、`probabilities`・`confidence` はそのまま。`score`：`value = score`、`probabilities`・`confidence` はそのまま（`legend` は表示用に保持）。Clef とローカル判定も同じ形に正規化する。
 
 ### 5.2 provider 一覧
 
 | id | 役割 | 外部送信 | 既定 | 備考 |
 | --- | --- | --- | --- | --- |
 | `deterministic` | 検査（判定の前段） | なし | 常に有効 | §6.1。provider と同じ結果型で理由を返すが、確率は持たない。 |
+| `none` | 判定なし（決定的検査だけ） | なし | — | provider ではなく判定 provider の設定値（`ProviderInfo.id` には含めない）。選ぶと AI 判定をせず、候補は決定的検査だけで「未判定」と表示する（Q8）。 |
 | `jev` | 判定 | あり | **AI を有効にしたときの既定の判定 provider** | API キー＋同意後だけ。§5.3。 |
 | `clef` | 判定 | あり（Cloudflare） | — | 利用者自身の Cloudflare アカウント ID と API トークン。§5.4。 |
-| `local` | 判定（logprobs）＋生成 | なし（loopback のとき） | Q1 で確認（推奨：生成の既定） | Ollama / llama.cpp / LM Studio。§5.5。 |
+| `local` | 判定（logprobs）＋生成 | なし（loopback かつ cloud モデルでないとき） | Q1 で確認（推奨：生成の既定） | Ollama / llama.cpp / LM Studio。§5.5。 |
 | `openai` | 生成 | あり | — | 同意後だけ。§5.6。 |
 | `custom` | 生成（OpenAI 互換） | 接続先しだい | — | 任意の base URL。§5.6。 |
 
-判定と生成は別々に選ぶ（例：判定 Jev ＋ 生成ローカル、判定ローカル ＋ 生成ローカル）。生成が未設定なら AI 生成は行わず、判定だけ設定されていても明示 Q/A には既定で判定を走らせない（§4）。
+判定と生成は別々に選ぶ（例：判定 Jev ＋ 生成ローカル、判定ローカル ＋ 生成ローカル、判定なし ＋ 生成ローカル）。判定 provider が Jev のまま未設定・未同意で、生成だけ使える場合は、Q8 の推奨どおり生成を進めて候補を「未判定（Jev 未設定）」と表示する（Q8 が決まるまでの案）。生成が未設定なら AI 生成は行わず、判定だけ設定されていても明示 Q/A には既定で判定を走らせない（§4）。
 
 ### 5.3 Jev
 
 - `POST https://api.typesafe.ai/v1/systemone`、`Authorization: Bearer <key>`、`model: "jev-latest"`（設定で変更可）。
-- 候補 1 件につき 1 リクエスト。`state` は「引用＋前後の文脈（§4 で除外領域と行内コメントを取り除いた本文から最大 1,500 字）＋候補の問い・答え」、`questions` は §6.2 の 3〜4 問。小さい state で並列に送るので、上限（64k / 32k トークン、40 req/s）に余裕があり、途中経過を候補ごとに表示できる。同時実行は 4 件まで。
+- 候補 1 件につき 1 リクエスト。`state` は「引用＋前後の文脈（§4 で除外領域と行内コメントを取り除いた本文から最大 1,500 字）＋候補の問い・答え」、`questions` は §6.2 の 4 問（`quality` は `criteria` に §6.2 の rubric を入れる）。小さい state で並列に送るので、上限（コンテキスト 64k トークン、40 req/s）に余裕があり、途中経過を候補ごとに表示できる。同時実行は 4 件まで。
 - 費用は入力トークンだけ（出力無料）。1 候補 ≈ 1,000 トークンとして 1 ページ 10 候補で約 1 万トークン ≈ $0.0004【未検証：日本語のトークン数】。
 - 401 → 認証失敗（キーの発行場所 `console.typesafe.ai/keys` を案内）、422 → 不正なリクエスト（再試行しない。サイズ超過なら範囲を狭める案内）、429・529 → バックオフ（§10）。
-- OpenRouter / Vercel AI Gateway 経由は M3 では作らない（経路を1つにして検証範囲を絞る）。必要になれば同じ `DecisionProvider` で追加できる。
+- OpenRouter 経由は M3 では作らない（経路を1つにして検証範囲を絞る）。必要になれば同じ `DecisionProvider` で追加できる。
 
 ### 5.4 Clef
 
 - Workers AI の REST（アカウント ID と API トークン）で `@cf/cloudflare/clef-flash`（既定、速さ優先）または `@cf/cloudflare/clef` を呼ぶ。入出力スキーマは【未検証】のため、実装前に公式ドキュメントで確定し、bool → `noul`、choice → `choice`、score → `score` に正規化する。
 - 無料枠（1 日 10,000 Neurons）を超えた場合の status を `quota` に対応付ける（【未検証】）。
 
-### 5.5 ローカル OpenAI 互換（Ollama / llama.cpp / LM Studio）
+### 5.5 ローカルサーバー（Ollama / llama.cpp / LM Studio）
 
-- 設定：base URL（既定 `http://localhost:11434/v1`）、サーバー種別（Ollama / llama.cpp / LM Studio）、生成モデル名、判定モデル名（同じでも可）。
+- 設定：サーバー種別（Ollama / llama.cpp / LM Studio）、base URL（サーバーのホストとポートまで。既定は種別ごとに Ollama `http://localhost:11434`、llama.cpp `http://localhost:8080`、LM Studio `http://localhost:1234`。下記の endpoint のパスは base URL の後ろに付ける）、生成モデル名、判定モデル名（同じでも可）。
 - **生成**：chat completions に JSON schema 付きの出力を要求し（サーバーごとの方式は【未検証】。使えなければ JSON をプロンプトで指示して検証で弾く）、`temperature` は低め（0.2）。
-- **判定**：§3.3 の作法。`noul` は「A=はい / B=いいえ」の 2 択で `P(A)` を値に、`score` は `1`〜`5` のラベルで期待値を値、最大確率を confidence にする。選択肢トークンが上位 logprobs に1つも無い場合は `invalid-response`（未判定）。
-- 接続テストで (1) モデル一覧に指定モデルがあるか、(2) 1 トークンの判定で logprobs が返るか、を確かめる。logprobs が返らない（古い Ollama、LM Studio の MLX runtime など）場合は「このサーバーでは判定に使えません（生成には使えます）」と表示する。
+- **判定の endpoint はサーバー種別ごと**（§3.3）。
+  - Ollama：OpenAI 互換の `/v1/chat/completions` に `logprobs: true`、`top_logprobs`（≤20）、`max_tokens: 1`、`temperature: 0`。
+  - llama.cpp：独自の `/completion` に `n_probs`、`n_predict: 1`、`temperature: 0`（プロンプトはチャットテンプレートを適用した文字列で送る）。
+  - LM Studio：`/v1/responses` に `include: ["message.output_text.logprobs"]`、`top_logprobs`、出力 1 トークン。
+- **判定**：§3.3 の作法。`noul` は「A=はい / B=いいえ」の 2 択で `P(A)` を値に、`score` は `1`〜`5` のラベルで最大確率の段階を値（`DecisionResult.value` の「score: level」と同じ）、確率をそのまま probabilities、最大確率を confidence にする（期待値が必要なら probabilities から計算する）。選択肢トークンが上位 logprobs に1つも無い場合は `invalid-response`（未判定）。
+- 接続テストで (1) モデル一覧に指定モデルがあるか、(2) 1 トークンの判定で logprobs が返るか、を確かめる。logprobs が返らない（v0.12.11 より古い Ollama、LM Studio の一部 runtime【未検証】など）場合は「このサーバーでは判定に使えません（生成には使えます）」と表示する。
 
 ### 5.6 OpenAI / カスタム（生成）
 
-- OpenAI 互換の chat completions。API キー、モデル名、カスタムは base URL。外部（非 loopback）なら同意が要る。
+- OpenAI 互換の chat completions。API キー、モデル名、カスタムは base URL。外部（非 loopback、または cloud モデル）なら同意が要る。
 - 判定に使う logprobs 経路は M3 では `local` だけに実装する（外部 LLM の logprobs 判定は Jev/Clef と役割が重なるため）。
 
 ## 6. 検査と判定
@@ -253,14 +287,22 @@ export interface GeneratorProvider extends ProviderInfo {
 | `supported` | `noul` | 答えは引用だけから正しく導けるか。 |
 | `answerable` | `noul` | 問いは、引用を読んだ学習者が一意に答えられる明確な問いか。 |
 | `one_fact` | `noul` | カードが1つの知識だけを問うているか。 |
-| `quality` | `score`（5 段階） | 学習カードとしての有用さ（M3 では表示順の参考だけに使う）。 |
+| `quality` | `score`（5 段階） | 学習カードとしての有用さ（M3 では表示順の参考だけに使う）。`criteria` は下の rubric。 |
+
+`quality` の rubric（`criteria`、低い順。日本語と英語の訳を §11 で比較する）：
+
+1. 学習カードとして役に立たない（引用と関係がない、自明すぎる、意味が通らない）。
+2. 問いか答えが曖昧で、大きな手直しが必要。
+3. 使えるが、問いの言い回しか答えの範囲に手直しが要る。
+4. そのまま使える。ページの中での重要度は中程度。
+5. そのまま使え、ページの要点を問う重要なカード。
 
 分類（しきい値は §11 で決める。初期値）：
 
 - **推奨**：決定的検査に要確認がなく、`supported ≥ 0.8`、`answerable ≥ 0.7`、`one_fact ≥ 0.7`。
 - **要確認**：推奨にも根拠が弱いにも当たらないもの。理由（どの検査・どの判定が低いか、confidence が 0.6 未満なら「AI の確信度が低い」）を候補に表示する。
-- **根拠が弱い**：`supported < 0.3`（要確認より優先）。Q6 の推奨どおり折りたたんで表示（削除しない）。
-- **未判定**：判定が失敗・タイムアウト・キャンセル。決定的検査の結果だけで表示する。
+- **根拠が弱い**：`supported < 0.3`（要確認より優先）。E1 のとおり折りたたんで表示（削除しない）。
+- **未判定**：判定なし（`none`）、判定 provider が未設定・未同意（「未判定（Jev 未設定）」など。Q8）、判定の失敗・タイムアウト・キャンセル。決定的検査の結果だけで表示する。
 
 **自動採用はしない**（推奨でも人が「採用」を押す）。表示順は 推奨 → 要確認 → 未判定 → 根拠が弱い、同じ分類内は原文の出現順。
 
@@ -268,25 +310,26 @@ export interface GeneratorProvider extends ProviderInfo {
 
 ### 7.1 規則
 
-- 既定は AI 無効（`ai.enabled = false`）。有効にすると判定 provider に Jev が選ばれた状態になるが、API キーと同意がそろうまで Jev には送らない。
-- 同意は provider ごと（`jev` / `clef` / `openai` / `custom`、非 loopback の `local`）に、設定タブで送信先ホストとプライバシー文（§7.2）を表示したうえでトグルを ON にしてもらう。base URL や provider を変えたら同意を取り直す。
-- 毎回の実行時、候補ポップアップの上部に「送信先：api.typesafe.ai（判定）／ローカル localhost:11434（生成）・本文 N 字・概算 $X」を表示し、外部送信がある実行は「送信して作る」ボタンを押すまで送らない（Q7）。
-- 送るのは除外領域を除いた本文（または選択範囲）、生成した候補、判定用の引用と文脈だけ。ファイルパス、Vault 名、他のノート、`Kioku/` の学習記録は送らない（ノート名はプロンプトの文脈として送るかを §11 で比較し、送る場合はプライバシー文に書く）。
+- 既定は AI 無効（`ai.enabled = false`）。有効にすると判定 provider に Jev が選ばれた状態になるが、API キーと同意がそろうまで Jev には送らない。判定 provider には「判定なし（決定的検査だけ）」も選べる（§5.2）。
+- 同意は provider ごと（`jev` / `clef` / `openai` / `custom`、非 loopback または cloud モデルの `local`）に、設定タブで送信先ホストとプライバシー文（§7.2）を表示したうえでトグルを ON にしてもらう。base URL・provider・モデル（cloud モデルかどうかが変わる）を変えたら同意を取り直す。
+- 毎回の実行時、候補ポップアップの上部に「送信先：api.typesafe.ai（判定）／ローカル localhost:11434（生成）・本文 N 字・概算 $X」を表示し、外部送信がある実行は「送信して作る」ボタンを押すまで送らない（E2）。cloud モデルは「外部」と表示する。
+- 送るのは除外領域を除いた本文（または選択範囲）、生成した候補、判定用の引用と文脈だけ。ノート名（タイトル）、ファイルパス、Vault 名、他のノート、`Kioku/` の学習記録は送らない。ノート名を送るかは Q7 で確認中（推奨：送らない）。送ることに決まった場合だけ、設定で選べるようにしてプライバシー文に書く。
 
 ### 7.2 プライバシー文（UI 文言の案）
 
 > AI で候補を作ると、このノートの本文（コードブロック・`%%` コメント・HTML コメント・数式ブロック・frontmatter を除く）が、選んだ AI サービスに送られます。
-> - 送信先：〈ホスト名〉（〈provider 名〉）。ローカル（このパソコン内）のサーバーを選んだ場合は外部に送られません。
+> - 送信先：〈ホスト名〉（〈provider 名〉）。このパソコン内のサーバーで実行するモデルを選んだ場合は外部に送られません。ただし、Ollama の cloud モデル（名前が `cloud` で終わるもの）や、ローカルのサーバーが別のサービスへ中継する設定の場合は、外部に送られます。
 > - 送信先での扱いは各サービスの規約に従います（例：TypeSafe AI は利用者データで学習しないと公表しています）。
 > - 費用は利用者のアカウントに請求されます。キャンセルしても、送信済みの分は請求されることがあります。
 > - API キーはこの Vault の `.obsidian/plugins/kioku/data.json` に暗号化せずに保存されます。（Q5 で `data.json` に決まった場合の文言）
 
-### 7.3 API キーの保存（Q5 の推奨案：`data.json`。未決定）
+### 7.3 API キーの保存（Q5 の推奨案 (a)：`data.json`。未決定）
 
 - 保存先はプラグインの `data.json` の `ai.providers.<id>` 内（学習記録の `Kioku/` とは別）。
 - **リスク**：平文。Obsidian Sync の設定同期・Git 管理・クラウド同期・バックアップで Vault と一緒に複製され得る。他のプラグインから読める。→ 設定画面と README に明記し、利用上限を設定した専用キーの利用を勧める。
 - キーはログ・Notice・エラー文・`artifacts/`・評価結果に出さない（エラー詳細は status とサービス名だけ。応答本文をそのまま表示しない）。入力欄は password 型、保存済みは末尾 4 文字だけ表示。「キーを削除」ボタンを置く。
 - 単体テストで「どの失敗経路の理由文にもキーの文字列が含まれない」ことを固定する。
+- Q5 が (b) に決まった場合は、`data.json` にはキーの有無だけを持ち、キー本体は `app.secretStorage` に置く（`minAppVersion` を 1.11.4 以上へ上げ、validate・README・manifest を更新する）。
 
 ## 8. UI
 
@@ -294,7 +337,7 @@ export interface GeneratorProvider extends ProviderInfo {
 - **進行表示**：「生成中…（N 秒）」→ 候補が届いたら決定的検査の結果ですぐ表示し、判定は候補ごとに届いた順に更新する。「キャンセル」ボタンは常に押せる。
 - **候補カード**：問い・答えの編集欄（M1 と同じ）、引用（原文の該当箇所を強調、クリックでノートの該当位置へ）、分類バッジ（推奨 / 要確認 / 未判定 / 根拠が弱い）、理由の一覧、生成・判定 provider 名。明示 Q/A と生成候補は見出しで分ける。
 - **採用**：生成候補の「採用」は §9 の挿入を行う。挿入位置（「引用元の段落の直後」）と、追加する行（Q/A、`^kioku-…`、引用の記録、空行）を採用前にカードに表示する。
-- **設定タブ（AI セクション）**：AI を使う（既定 OFF）、判定 provider（既定 Jev）、生成 provider（Q1）、provider ごとのキー・接続先・モデル・同意トグル、接続テスト、タイムアウト（既定 判定 20 秒 / 生成 60 秒）、プライバシー文。UI 文言は公式 lint の sentence-case 規則を守る（`docs/architecture.md`「既知の制約」）。
+- **設定タブ（AI セクション）**：AI を使う（既定 OFF）、判定 provider（既定 Jev。「判定なし」も選べる）、生成 provider（Q1）、provider ごとのキー・接続先・モデル・同意トグル、接続テスト、タイムアウト（既定 判定 20 秒 / 生成 60 秒）、プライバシー文。UI 文言は公式 lint の sentence-case 規則を守る（`docs/architecture.md`「既知の制約」）。
 - 状態 modal の実装状況表示は、M3 実装時に「AI：設定時のみ、候補は人が採用」へ更新する（それまでは「AI は未実装」のまま）。
 
 ## 9. 採用：生成カードの挿入（Q2 の推奨 (A) を前提にした案）
@@ -337,7 +380,9 @@ A: 葉緑体 ^kioku-k3j9x2m4pq
 | キャンセル | 未完了の呼び出しの結果を捨て、届いた候補と判定は残す（未判定は「未判定（キャンセル）」）。ポップアップを閉じる・プラグインの unload も同じ。 |
 | 部分的な結果 | 候補ごとに独立して表示する。生成が失敗しても明示 Q/A は使える。判定の一部失敗は該当候補だけ未判定。 |
 
-`requestUrl`（Obsidian 公開 API）には中断の手段とタイムアウト指定がない【未検証：最新版の型で再確認】。そのためキャンセルとタイムアウトは「待つのをやめて結果を捨てる」で実装し、送信済みのリクエストはサーバー側で処理され得る（外部では課金され得る）ことをプライバシー文に書く（§7.2）。`requestUrl` は `throw: false` で status を受け取り、理由を出し分ける。
+`requestUrl`（Obsidian 公開 API）には中断の手段とタイムアウト指定がない（§3.5）。そのためキャンセルとタイムアウトは「待つのをやめて結果を捨てる」で実装し、送信済みのリクエストはサーバー側で処理され得る（外部では課金され得る）ことをプライバシー文に書く（§7.2）。`requestUrl` は `throw: false` で status を受け取り、理由を出し分ける。
+
+**取り残されたリクエストを積み上げない**：同時実行数（provider ごとに 4）の枠は、待つのをやめた時点ではなく、実際の `requestUrl` の Promise が解決・失敗した時点で返す。キャンセル直後に「再判定」や再実行をしても、取り残されたリクエストが枠を使っている間は新しいリクエストを送らず待つので、実際に飛んでいる数が上限を超えない。取り残されたリクエストの応答は、実行ごとの世代番号で古いものと判断して捨てる。
 
 ## 11. 実測計画（「瞬時」と言う前に）
 
@@ -361,7 +406,7 @@ A: 葉緑体 ^kioku-k3j9x2m4pq
 
 ### 11.3 報告の基準
 
-- 測る組み合わせ：判定 {なし, Jev, Clef-flash, Clef, ローカル} × 生成 {ローカル（候補モデル 2〜3 個）, OpenAI（同意時）}。測定した PC の構成（CPU/GPU/メモリ）を記録する。
+- 測る組み合わせ：判定 {なし, Jev, Clef-flash, Clef, ローカル（サーバー種別ごと）} × 生成 {ローカル（候補モデル 2〜3 個）, OpenAI（同意時）}。測定した PC の構成（CPU/GPU/メモリ）を記録する。
 - Q3 の目標値を満たした組み合わせだけを「瞬時」と呼ぶ。満たさない場合は数値（「約 N 秒」）で書く。
 - 品質の目安（初期案）：推奨候補の precision ≥ 0.8、推奨に残った根拠なし候補 ≤ 5%、引用一致率 ≥ 0.9。Jev がこれを日本語で満たさない場合は Q4 に従って利用者に報告する。
 - 実行は tooling の Node script（`scripts/` 配下、配布物に入らない）で行い、キーは環境変数から読み、結果（キーを含まない）を `artifacts/lev-277/eval/` に残す。runtime と同じ `src/ai/` の純粋ロジックを使い、通信だけ Node の HTTP に差し替える。
@@ -371,10 +416,10 @@ A: 葉緑体 ^kioku-k3j9x2m4pq
 - runtime は公開 Obsidian API とブラウザ互換コードだけ。通信は Obsidian の `requestUrl` だけを使う（CORS の影響を受けず `http://localhost` にも届くため。`fetch` や Node/Electron の HTTP は使わない）。`requestUrl` を包む `HttpClient` は `src/ai/http.ts` に置き、それ以外の `src/ai/` は `HttpClient` を引数で受け取る純粋なコードにする（単体テストでは偽の `HttpClient`）。
 - `src/main.ts` は登録と lifecycle だけ（変更は不要か、コマンド追加程度）。
 - 提案する構成：
-  - `src/ai/types.ts`、`src/ai/checks.ts`（決定的検査）、`src/ai/classify.ts`（分類としきい値）、`src/ai/prompts.ts`（生成・判定のプロンプト）、`src/ai/pipeline.ts`（生成 → 検査 → 判定、並列数・キャンセル・部分結果）、`src/ai/consent.ts`（外部判定・同意判定）。
-  - `src/ai/providers/jev.ts`、`clef.ts`、`openai-compatible.ts`（local / openai / custom の共通、logprobs 判定を含む）、`index.ts`（設定から factory）。
+  - `src/ai/types.ts`、`src/ai/checks.ts`（決定的検査）、`src/ai/classify.ts`（分類としきい値）、`src/ai/prompts.ts`（生成・判定のプロンプト）、`src/ai/pipeline.ts`（生成 → 検査 → 判定、並列数・キャンセル・部分結果）、`src/ai/consent.ts`（外部判定〈接続先と cloud モデル〉・同意判定）。
+  - `src/ai/providers/jev.ts`、`clef.ts`、`openai-compatible.ts`（local / openai / custom の生成の共通）、`local-judge.ts`（サーバー種別ごとの logprobs 判定。Ollama・llama.cpp・LM Studio）、`index.ts`（設定から factory）。
   - `src/cards/insertion.ts`（純粋な挿入計画。§9、Q2 の推奨案 (A) の場合）。書き込みは既存の `src/cards/writer.ts` を拡張。
-  - `src/store/settings.ts`：`schemaVersion` は 1 のまま、任意の `ai` セクションを足す（無ければ AI 無効の既定値）。現在の `parseSettings` は未知のキーを無視して読むので、M2 版の Kioku に戻しても既存設定と復習は動く。ただし M2 版が設定を保存すると `ai` セクション（API キーを含む）が消えるため、その旨を §15 に記す。
+  - `src/store/settings.ts`：`schemaVersion` は 1 のまま、任意の `ai` セクションを足す（無ければ AI 無効の既定値）。現在の `parseSettings` は未知のキーを無視して読むので、M2 版の Kioku に戻しても既存設定と復習は動く。ただし M2 版が設定を保存すると `ai` セクション（API キーを含む）が消えるため、その旨を §15 に記す。現在の `parseSettings` と `SettingsStore.update` は既知の項目だけを残して未知のキーを捨てるので、M3 の実装では `ai` セクションを解釈・保持するよう両方を拡張し、M3 版自身の保存（トリガータグの変更など）で `ai` が消えないことを単体テストで固定する。
   - `src/ui/candidate-modal.ts`（生成候補・分類・進行表示・キャンセル）、`src/ui/settings-tab.ts`（AI セクション）、理由文は `src/ai/reasons.ts`（M1 の `reasons.ts` の方式）。
 - 起動時にネットワーク・`data.json` に触れない規則（M0 から）を保ち、単体テストの起動時 I/O 禁止の変異検査に「`requestUrl` を呼ばない」を加える。
 - runtime 依存は増やさない（JSON schema の検証も自前の小さな検証関数で行う）。
@@ -389,15 +434,16 @@ A: 葉緑体 ^kioku-k3j9x2m4pq
 
 1. 起動直後と設定タブ・候補ポップアップを開いただけでは、ネットワーク通信もノート・`data.json` の書き込みも起きない（smoke と通信の記録）。
 2. AI 無効（既定）：抽出で明示 Q/A と決定的検査の注意だけが出て、AI 未設定の案内と「設定を開く」が表示される。通信なし。
-3. AI を有効にすると判定 provider が Jev になっているが、キー未入力・同意なしでは「AI で候補を作る」で通信せず、理由が表示される。
+3. AI を有効にすると判定 provider が Jev になっているが、キー未入力・同意なしでは Jev に通信しない。生成が未設定なら「AI で候補を作る」で通信せず理由が表示される。生成（ローカル）だけ設定してあれば、Q8 の決定に従う（推奨案なら生成は進み、候補が「未判定（Jev 未設定）」になる）。判定 provider に「判定なし」を選んでも生成できる。
 4. ローカル（Ollama）を生成に設定：日本語ノートから候補が出て、引用が原文に強調表示され、引用が原文に無い候補は除外件数として表示される。固定枚数にならない（根拠の少ないノートでは 0〜1 件）。
-5. ローカル判定（logprobs）・Jev・Clef（同意後）それぞれで分類バッジと理由が出る。Jev の同意前後で送信先表示が正しい。
+5. ローカル判定（logprobs。Ollama・llama.cpp・LM Studio のうち用意できたサーバー種別ごと）・Jev・Clef（同意後）それぞれで分類バッジと理由が出る。Jev の同意前後で送信先表示が正しい。
 6. 生成候補の採用（Q2 が推奨 (A) に決まった場合）：引用元のブロックの直後に Q/A・`^kioku-…`・`%%kioku-src%%` が挿入され、原文の文字は変わらない。Reading view で ID と引用記録が見えない。M2 のデッキに New として入る。Undo で1回で戻る。
 7. 採用前に引用元を外部で変更・複製すると、書かずに理由が表示される。Canvas ガード、ディスク確認、回復は M1 と同じに動く。
 8. 誤った API キー（401）、ローカルサーバー停止（接続失敗）、タイムアウト（短く設定）、生成中・判定中のキャンセル、ポップアップを閉じる、それぞれで理由が表示され、届いた結果は残り、ノートは変わらない。Notice・console・`artifacts/` にキーが出ない。
 9. 429 の再現が難しい場合は単体テストで固定したことを記録し、実機では NOT TESTED と明記する。
 10. 設定の移行：M2 の `data.json`（schemaVersion 1）から起動して設定タブを開くと、既存設定が保たれ、AI が無効の状態で表示される。
-11. 遅延：§11 の目標をこの PC で満たすかを、実機の候補ポップアップで（評価 script とは別に）数回計測して記録する。
+11. **cloud モデル**：Ollama で `:cloud` / `-cloud` のモデルを選ぶと、`localhost` でも「外部」と表示され、同意がなければ送らない（Q6 の決定に従う）。同意後は送信前の表示に外部送信先が出る。ローカルのサーバーが中継し得る旨の注意が設定画面とプライバシー文にある。
+12. 遅延：§11 の目標をこの PC で満たすかを、実機の候補ポップアップで（評価 script とは別に）数回計測して記録する。
 
 ## 15. リスク
 
@@ -406,7 +452,8 @@ A: 葉緑体 ^kioku-k3j9x2m4pq
 - **引用の完全一致が厳しすぎる**：生成モデルが空白や記号を変えると除外が増える。正規化の範囲は §11 の引用一致率で調整する（範囲を広げすぎると根拠のない候補が通る）。
 - **API キーの平文保存**：§7.3。
 - **古い版での設定保存**：M3 から M2 版の Kioku に戻して設定を保存すると、`data.json` の `ai` セクション（キーと同意）が消える。再設定が必要になる旨を README に書く。
-- **キャンセルしても送信済み**：`requestUrl` は中断できない【未検証】。課金・処理はサーバー側で続き得る。
+- **キャンセルしても送信済み**：`requestUrl` は中断できない（§3.5）。課金・処理はサーバー側で続き得る。
+- **ローカルのつもりの外部送信**：Ollama の cloud モデルや、外部へ中継するローカルサーバー。名前の規則と `/api/show`【要検証】で判別できる範囲だけ外部扱いにでき、中継は検出できないので、表示で注意する（§5.1、§7.2）。
 - **外部サービスの仕様・料金の変化**：Jev は登録再開直後でクレジット施策も変わっている。Clef の Workers AI 提供は 2026-10-01 開始。実装前に §3 を再確認する。
 - **生成カードの挿入による本文の変化**：Q2 の決定によっては利用者のメモの読みやすさを損なう。
 - **プロンプトインジェクション**：ノート本文（他人から貰ったメモなど）に指示文があっても、出力は JSON 検証と引用の完全一致で縛り、採用は人が行う。AI の出力でノートを書き換える経路は採用ボタンだけ。

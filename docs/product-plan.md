@@ -68,11 +68,11 @@ PC の Obsidian 内で、学習メモから候補を人が選び、採用カー�
 
 詳細・未決定の確認事項・実測計画は `docs/m3-design.md`。**M3 は設計案の段階で、実装していない。AI による候補作成・判定は使えない。**「瞬時」は実測（`docs/m3-design.md` §11）の前には使わない。
 
-- **外部送信**：既定 OFF。ローカル優先（Ollama など）を案内する。外部 provider は API キーと provider ごとの同意がそろうまで使わない。
+- **外部送信**：既定 OFF。ローカル優先（Ollama など）を案内する。外部 provider（`localhost` 経由でも外部で実行される Ollama の cloud モデルを含む）は API キーと provider ごとの同意がそろうまで使わない。
 - **AI 未設定時**：決定的な検査だけ（引用の原文完全一致、答えが引用に含まれるか、重複、長さ・1枚1知識の簡易判定）。AI による Q/A 生成は AI provider を設定したときだけで、UI が理由と設定方法を説明する。
 - **provider**：判定モデルを差し替えられる provider 方式の Decision Engine。Jev（TypeSafe AI）と Clef（Cloudflare Workers AI、利用者自身のアカウント）の両方を入れる。AI を有効にしたときの既定の判定 provider は Jev（キーと同意の後だけ使う）。Gemini は使わない。Jev/Clef は文章を書けないため、要約 → Q/A には別の生成 provider（ローカルの OpenAI 互換サーバー、または同意のうえで OpenAI/カスタム）を使う。
 - **範囲**：M3 はカード候補の判定と生成だけ。エージェントへのルーティングは範囲外。プラグイン内の WebGPU/ONNX 推論（Laya Multilingual を含む）は別 PoC の LEV-299。
-- **未決定（利用者に確認中）**：既定の生成 provider、生成カードの保存位置、「瞬時」の目標値、Jev の日本語精度が基準未満の場合の扱い、API キーの保存先、根拠が弱い候補の見せ方、1回の送信量の上限（`docs/m3-design.md` §2）。
+- **未決定（利用者に確認中）**：既定の生成 provider、生成カードの保存位置、「瞬時」の目標値、Jev の日本語精度が基準未満の場合の扱い、API キーの保存先（`data.json` か SecretStorage か）、Ollama の cloud モデルの扱い、ノート名を送るか、判定 provider が未設定のまま生成するか（`docs/m3-design.md` §2）。根拠が弱い候補の見せ方と1回の送信量・送信前の表示は設計判断として決めた（同 §2.1）。
 
 ## 未決定
 
