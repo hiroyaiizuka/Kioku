@@ -396,6 +396,7 @@ async function launchLocked(root, env, system, paths) {
   const state = { pid: child.pid, profile: paths.profile, port, startedAt, executable, version: profile.version,
     vault: expected.vault, log: paths.log };
   writeState(root, state);
+  system.onSpawned?.(child.pid); // Opt-in heavy queue: hand the native slot to this PID right away (no-op otherwise).
 
   let page;
   try {

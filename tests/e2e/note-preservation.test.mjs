@@ -2,10 +2,12 @@
 import { createServer } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { cleanup, createFixture } from '../helpers/fixture.mjs';
+import { heavyQueueVariables, withoutHeavyQueue } from '../helpers/hermetic-env.mjs';
 import { prepareVault } from '../../scripts/lib/harness.mjs';
 import { sha256 } from '../../scripts/lib/build.mjs';
 
@@ -88,7 +90,7 @@ async function simulatedSmoke(root, expected, baselineId, mutateAt, baselineMode
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   let processHandle;
   try {
-    processHandle = spawn(process.execPath, ['scripts/e2e/smoke.mjs', ...(baselineMode ? ['baseline'] : [])], { cwd: root, env: { ...process.env,
+    processHandle = spawn(process.execPath, ['scripts/e2e/smoke.mjs', ...(baselineMode ? ['baseline'] : [])], { cwd: root, env: { ...withoutHeavyQueue(),
       KIOKU_BASELINE_ID: baselineId, KIOKU_CDP_URL: `http://127.0.0.1:${server.address().port}` } });
     let stdout = ''; let stderr = '';
     processHandle.stdout.on('data', (chunk) => stdout += chunk); processHandle.stderr.on('data', (chunk) => stderr += chunk);
@@ -171,4 +173,29 @@ describe('real smoke CLI note preservation using non-UI CDP simulation', () => {
       expect(JSON.parse(result.stdout).status).toBe('FAIL');
     });
   }
+});
+
+// Regression (LEV-305 native gate on 6b3bbb8): inside an opted-in `npm run check` the test process carries
+// KIOKU_HEAVY_QUEUE=1 and the slot holder's token; the simulated smoke children must not see them.
+describe('the same protocol inside an opted-in check (KIOKU_HEAVY_QUEUE=1 exported to the test process)', () => {
+  const saved = {}; let scratch; let queueDir;
+  beforeAll(() => {
+    for (const key of heavyQueueVariables) saved[key] = process.env[key];
+    scratch = mkdtempSync(join(tmpdir(), 'kioku-note-queue-')); queueDir = join(scratch, 'queue');
+    Object.assign(process.env, { KIOKU_HEAVY_QUEUE: '1', ORCA_HEAVY_QUEUE_DIR: queueDir, ORCA_HEAVY_QUEUE_TOKEN: randomUUID() });
+  });
+  afterAll(() => {
+    for (const key of heavyQueueVariables) { if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key]; }
+    rmSync(scratch, { recursive: true, force: true });
+  });
+  it('accepts unchanged files and still fails on a changed note, without touching any queue', async () => {
+    const { root, expected, id } = setup();
+    const unchanged = await simulatedSmoke(root, expected, id);
+    expect(unchanged.status, unchanged.stderr).toBe(0);
+    writeFileSync(join(expected.vault, 'Welcome.md'), 'MUTATED BY M0 STARTUP\n');
+    const changed = await simulatedSmoke(root, expected, id, 'startup');
+    expect(changed.status, changed.stdout).toBe(1);
+    expect(changed.stderr).toMatch(/Vault content changed/u);
+    expect(existsSync(queueDir)).toBe(false);
+  });
 });

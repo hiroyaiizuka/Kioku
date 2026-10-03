@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { preflight } from '../lib/harness.mjs';
+import { assertNativeHeld, heavyQueueEnabled } from '../lib/heavy-queue.mjs';
 import { assertNoReviewDataFolder, assertNotesUnchanged, captureNoteBaseline, loadNoteBaseline } from '../lib/note-baseline.mjs';
 import { atomicWrite, ensureDirectory, projectRoot } from '../lib/paths.mjs';
 import { CDP, sleep } from '../lib/cdp.mjs';
@@ -48,6 +49,8 @@ try {
   output = join(root, 'artifacts', 'e2e-smoke', `${Date.now()}-${randomUUID()}`);
   ensureDirectory(root, output);
   const expected = preflight(root); report.preflight = expected;
+  // Opt-in (KIOKU_HEAVY_QUEUE=1): only inside this worktree's native slot; the owner is kept in the record.
+  if (heavyQueueEnabled(process.env)) report.heavyQueue = assertNativeHeld(root, process.env);
   const baseline = loadNoteBaseline(root, expected, process.env.KIOKU_BASELINE_ID);
   report.noteBaseline = { id: baseline.id, capturedAt: baseline.capturedAt, stage: baseline.stage, vaultClosed: baseline.vaultClosed };
   report.noteChecks = [{ phase: 'after startup, before UI operations (also after harness:quit → harness:launch)',
