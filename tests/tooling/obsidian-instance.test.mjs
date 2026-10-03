@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { userInfo } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, createFixture } from '../helpers/fixture.mjs';
+import { withoutHeavyQueue } from '../helpers/hermetic-env.mjs';
 import { prepareVault } from '../../scripts/lib/harness.mjs';
 import { restrictedModeAction } from '../../scripts/lib/dedicated-cdp.mjs';
 import { assertDedicatedStopped, childEnvironment, cliSocketExists, cliSocketPath, compareVersions, defaultAsarSourceDir, instancePaths, launchDedicated, ownsProfile,
@@ -430,7 +431,7 @@ describe('obsidian-instance CLI', () => {
   it('quit resolves KIOKU_QUIT_TIMEOUT_MS from the environment and is a no-op without a record', () => {
     const { root } = setup();
     const run = (env) => spawnSync(process.execPath, ['scripts/obsidian-instance-cli.mjs', 'quit'],
-      { cwd: root, encoding: 'utf8', env: { ...process.env, KIOKU_HEAVY_QUEUE: '', ...env } });
+      { cwd: root, encoding: 'utf8', env: { ...withoutHeavyQueue(), ...env } });
     const invalid = run({ KIOKU_QUIT_TIMEOUT_MS: '5' });
     expect(invalid.status).toBe(1); expect(invalid.stderr).toMatch(/KIOKU_QUIT_TIMEOUT_MS must be/);
     const ok = run({ KIOKU_QUIT_TIMEOUT_MS: '120000' });
