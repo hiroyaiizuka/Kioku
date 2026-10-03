@@ -43,6 +43,13 @@ const settle = async (predicate, rounds = 500) => {
   throw new Error('condition not reached');
 };
 const pause = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+/** Poll real processes; never falls through silently (a slow machine fails here with the reason, not later). */
+async function waitUntil(predicate, what, limitMs = 45000) {
+  const end = Date.now() + limitMs;
+  while (!predicate()) { if (Date.now() > end) throw new Error(`Timed out after ${limitMs} ms waiting for ${what}.`); await pause(10); }
+}
+// Tests that start real Node processes: generous limits so CPU load from other jobs slows them but does not fail them.
+const realProcessTimeout = 120000;
 const request = (worktree, job = 'check', env = {}) => ({ project: 'kioku', worktree, job, env });
 const historyEvents = (dir) => readFileSync(join(dir, 'history.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line).event);
 
@@ -92,16 +99,16 @@ describe('FIFO order', () => {
       return new Promise((resolve) => { child.on('exit', (code) => resolve({ code, stderr })); });
     };
     const first = start('A', join(scratch(), 'a'));
-    for (let tries = 0; !existsSync(log) && tries < 1000; tries += 1) await pause(10);
+    await waitUntil(() => existsSync(log), 'A to start its job');
     const second = start('B', join(scratch(), 'b'));
-    for (let tries = 0; !(existsSync(join(dir, 'tickets')) && readdirSync(join(dir, 'tickets')).length) && tries < 1000; tries += 1) await pause(10);
+    await waitUntil(() => readdirSync(join(dir, 'tickets')).length === 1, 'B to queue behind A');
     writeFileSync(finish, '');
     const [a, b] = await Promise.all([first, second]);
     expect(a.code, a.stderr).toBe(0); expect(b.code, b.stderr).toBe(0);
     expect(readFileSync(log, 'utf8')).toBe('start A\nend A\nstart B\nend B\n');
     expect(b.stderr).toMatch(/waiting for the check slot .*owner: project=pilot job=check pid=\d+/u);
     expect(readdirSync(join(dir, 'tickets'))).toEqual([]); expect(existsSync(join(dir, 'owner.json'))).toBe(false);
-  }, 30000);
+  }, realProcessTimeout);
 
   it('simultaneous enqueues behind a barrier get distinct sequence numbers and are served in that order (many rounds)', async () => {
     const dir = join(scratch(), 'queue'); const work = scratch();
@@ -126,9 +133,9 @@ describe('FIFO order', () => {
         let stderr = ''; child.stderr.on('data', (chunk) => { stderr += chunk; });
         return new Promise((resolve) => { child.on('exit', (code) => resolve({ code, stderr })); });
       });
-      for (let tries = 0; !(existsSync(`${go}.ready-x`) && existsSync(`${go}.ready-y`)) && tries < 2000; tries += 1) await pause(5);
+      await waitUntil(() => existsSync(`${go}.ready-x`) && existsSync(`${go}.ready-y`), `round ${round}: both children at the barrier`);
       writeFileSync(go, '');
-      for (let tries = 0; listTickets(holderQueue).length < 2 && tries < 2000; tries += 1) await pause(5);
+      await waitUntil(() => listTickets(holderQueue).length === 2, `round ${round}: both tickets`);
       const tickets = listTickets(holderQueue);
       expect(tickets).toHaveLength(2);
       expect(tickets[0].seq, `round ${round}: equal sequence numbers`).toBeLessThan(tickets[1].seq);
@@ -136,7 +143,7 @@ describe('FIFO order', () => {
       for (const result of await Promise.all(children)) expect(result.code, result.stderr).toBe(0);
       expect(readFileSync(log, 'utf8')).toBe(`${tickets.map((ticket) => ticket.worktree.slice('/race/'.length)).join('\n')}\n`);
     }
-  }, 120000);
+  }, 600000);
 });
 
 describe('stale owners and tickets', () => {
@@ -367,7 +374,7 @@ describe('Kioku wiring (opt-in)', () => {
     expect(result.status).toBe(3);
     expect(recorded).toEqual({ argv: ['run', 'check:steps'], token: null });
     expect(existsSync(queueDir)).toBe(false);
-  });
+  }, realProcessTimeout);
 
   it('opt-out: check:steps is the pre-LEV-305 check chain, and its exit code and output bytes pass through unchanged', () => {
     // Pre-change `check` (7aac9c8). The only console difference is npm's own heading pair for the extra `check:steps` hop.
@@ -383,7 +390,7 @@ describe('Kioku wiring (opt-in)', () => {
       expect(result.stdout.toString('utf8')).toBe('outé\n'); expect(result.stderr.toString('utf8')).toBe(`err ${code}\n`);
       expect(existsSync(queueDir)).toBe(false);
     }
-  });
+  }, realProcessTimeout);
 
   it('opt-out: smoke records keep the pre-change schema and quit is unchanged; no queue directory is created', () => {
     const root = createFixture(); fixtures.push(root); prepareVault(root);
@@ -401,7 +408,7 @@ describe('Kioku wiring (opt-in)', () => {
     expect(quit.status, quit.stderr).toBe(0);
     expect(JSON.parse(quit.stdout)).toEqual({ status: 'NOT_RUNNING', message: 'No recorded dedicated instance; nothing was signalled.' });
     expect(existsSync(queueDir)).toBe(false);
-  }, 60000);
+  }, realProcessTimeout);
 
   it('npm run check with KIOKU_HEAVY_QUEUE=1 runs the same steps inside the slot and releases it', () => {
     const { result, queueDir, recorded } = checkEntry({ KIOKU_HEAVY_QUEUE: '1' });
@@ -409,7 +416,7 @@ describe('Kioku wiring (opt-in)', () => {
     expect(recorded.argv).toEqual(['run', 'check:steps']); expect(recorded.token).toMatch(/^[0-9a-f-]{36}$/u);
     expect(existsSync(join(queueDir, 'owner.json'))).toBe(false);
     expect(historyEvents(queueDir)).toEqual(['acquired', 'released']);
-  });
+  }, realProcessTimeout);
 
   it('harness:launch hands the native slot to the dedicated PID, which keeps it after the launch CLI exits', async () => {
     const host = fakeHost(); const dir = scratch(); const env = { ORCA_HEAVY_QUEUE_DIR: dir };
