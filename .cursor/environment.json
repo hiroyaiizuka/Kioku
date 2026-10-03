@@ -1,0 +1,1 @@
+{"install": "mkdir -p \"$HOME/.cursor/rules\" && cp .cursor/rules/pstack-models.mdc \"$HOME/.cursor/rules/pstack-models.mdc\""}
