@@ -392,10 +392,12 @@ describe('AI settings tab', () => {
     await typeInto('タイムアウト：生成', '', { blur: true });
     expect(plugin.data.ai.timeouts.generateSeconds).toBe(90);
     expect(field('タイムアウト：生成').querySelector('.kioku-settings-status').textContent).toBe('');
+    expect(field('タイムアウト：生成').querySelector('input').value).toBe('90');
 
     await typeInto('タイムアウト：判定', '', { blur: true });
     expect(plugin.data.ai.timeouts.judgeSeconds).toBe(30);
     expect(field('タイムアウト：判定').querySelector('.kioku-settings-status').textContent).toBe('');
+    expect(field('タイムアウト：判定').querySelector('input').value).toBe('30');
   });
 
   it('timeout fields: "1e" rejects and resets to saved value with message, "0600" and "007" normalize to saved value', async () => {
@@ -403,16 +405,37 @@ describe('AI settings tab', () => {
     await tab(plugin); await flush();
 
     const generateInput = field('タイムアウト：生成').querySelector('input');
-    generateInput.type = 'text';
-    generateInput.value = '1e';
+    let mockValue = '';
+    const originalValueDescriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(generateInput), 'value');
+    const originalValidityDescriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(generateInput), 'validity');
+    
+    Object.defineProperty(generateInput, 'value', {
+      get: () => mockValue,
+      set: (val) => { mockValue = val; },
+      configurable: true,
+    });
+    Object.defineProperty(generateInput, 'validity', {
+      get: () => ({ badInput: true, valid: false }),
+      configurable: true,
+    });
     generateInput.dispatchEvent(new window.Event('change'));
     await flush();
     await vi.runAllTimersAsync();
     expect(plugin.data.ai.timeouts.generateSeconds).toBe(60);
     expect(field('タイムアウト：生成').querySelector('.kioku-settings-status').textContent).toContain('1〜600 秒の範囲で入力してください');
-    expect(generateInput.value).toBe('60');
+    expect(mockValue).toBe('60');
+    
+    if (originalValueDescriptor) {
+      Object.defineProperty(generateInput, 'value', originalValueDescriptor);
+    } else {
+      delete generateInput.value;
+    }
+    if (originalValidityDescriptor) {
+      Object.defineProperty(generateInput, 'validity', originalValidityDescriptor);
+    } else {
+      delete generateInput.validity;
+    }
 
-    generateInput.type = 'number';
     await typeInto('タイムアウト：生成', '0600', { blur: true });
     await flush();
     expect(plugin.data.ai.timeouts.generateSeconds).toBe(600);

@@ -126,8 +126,21 @@ export function renderAiSettings(containerEl: HTMLElement, section: AiSettingsSe
       text.setPlaceholder('60').setValue(String(ai.timeouts.generateSeconds));
       text.inputEl.addEventListener('change', guarded(async () => {
         const value = text.inputEl.value.trim();
+        if (text.inputEl.validity.badInput) {
+          status.setText('1〜600 秒の範囲で入力してください。');
+          try {
+            await lastSave;
+          } catch {
+            // Ignore previous save failure
+          }
+          const latest = section.current;
+          text.setValue(String(latest.timeouts.generateSeconds));
+          return;
+        }
         if (!value) {
           status.setText('');
+          const latest = section.current;
+          text.setValue(String(latest.timeouts.generateSeconds));
           return;
         }
         if (!/^\d+$/.test(value)) {
@@ -220,8 +233,21 @@ export function renderAiSettings(containerEl: HTMLElement, section: AiSettingsSe
       text.setPlaceholder('60').setValue(String(ai.timeouts.generateSeconds));
       text.inputEl.addEventListener('change', guarded(async () => {
         const value = text.inputEl.value.trim();
+        if (text.inputEl.validity.badInput) {
+          status.setText('1〜600 秒の範囲で入力してください。');
+          try {
+            await lastSave;
+          } catch {
+            // Ignore previous save failure
+          }
+          const latest = section.current;
+          text.setValue(String(latest.timeouts.generateSeconds));
+          return;
+        }
         if (!value) {
           status.setText('');
+          const latest = section.current;
+          text.setValue(String(latest.timeouts.generateSeconds));
           return;
         }
         if (!/^\d+$/.test(value)) {
@@ -275,8 +301,21 @@ export function renderAiSettings(containerEl: HTMLElement, section: AiSettingsSe
       text.setPlaceholder('20').setValue(String(ai.timeouts.judgeSeconds));
       text.inputEl.addEventListener('change', guarded(async () => {
         const value = text.inputEl.value.trim();
+        if (text.inputEl.validity.badInput) {
+          status.setText('1〜600 秒の範囲で入力してください。');
+          try {
+            await lastSave;
+          } catch {
+            // Ignore previous save failure
+          }
+          const latest = section.current;
+          text.setValue(String(latest.timeouts.judgeSeconds));
+          return;
+        }
         if (!value) {
           status.setText('');
+          const latest = section.current;
+          text.setValue(String(latest.timeouts.judgeSeconds));
           return;
         }
         if (!/^\d+$/.test(value)) {
