@@ -2,6 +2,7 @@
 // contract — no network until the run button, consent and preview before external sending, cancel,
 // adoption through the M1 write path — not native Obsidian behaviour or any real AI service.
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeEditor, MockMarkdownView, MockTFile, compilePlugin, createApp, installDom, network } from '../helpers/obsidian-mock.mjs';
 
@@ -28,7 +29,7 @@ let Plugin;
 let notices;
 beforeEach(async () => {
   dom = installDom(); notices = [];
-  Plugin = await compilePlugin(readFileSync('src/main.ts', 'utf8'), notices);
+  Plugin = await compilePlugin(readFileSync(join(process.cwd(), 'src/main.ts'), 'utf8'), notices);
   // Date is faked too, so the 「生成中…（N 秒）」 counter (Date.now) moves with the fake timers.
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
 });
@@ -205,12 +206,18 @@ describe('AI section of the candidate popup', () => {
 });
 
 describe('AI settings tab', () => {
-  const tab = (plugin) => { const settingTab = plugin.settingTabs[0]; document.body.append(settingTab.containerEl); settingTab.display(); return settingTab; };
+  const tab = async (plugin) => {
+    const settingTab = plugin.settingTabs[0];
+    document.body.append(settingTab.containerEl);
+    settingTab.display();
+    await flush();
+    return settingTab;
+  };
   const field = (name) => [...document.querySelectorAll('.setting-item')].find((item) => item.querySelector('.setting-item-name').textContent === name);
 
   it('is off by default, shows the privacy text, and enabling it never sends anything', async () => {
     const { plugin } = open(null);
-    tab(plugin); await flush();
+    await tab(plugin); await flush();
     expect(document.querySelector('.kioku-ai-privacy').textContent).toContain('ノート名・ファイルパス・Vault 名は送りません');
     const toggle = field('AI を使う').querySelector('input');
     expect(toggle.checked).toBe(false);
@@ -223,7 +230,7 @@ describe('AI settings tab', () => {
 
   it('never puts a saved key into the page, and consent follows the destination', async () => {
     const { plugin } = open({ ai: ai({ providers: { local: { model: 'qwen3:8b' }, jev: { apiKey: KEY } } }) });
-    tab(plugin); await flush();
+    await tab(plugin); await flush();
     const keyInput = field('Jev：API キー').querySelector('input');
     expect(keyInput.type).toBe('password');
     expect(keyInput.value).toBe('');
@@ -246,7 +253,7 @@ describe('AI settings tab', () => {
     const model = 'gemma4:31b-cloud';
     const consent = `local|ollama|http://localhost:11434|${model}`;
     const { plugin } = open({ ai: ai({ providers: { local: { model, consent } } }) });
-    tab(plugin); await flush();
+    await tab(plugin); await flush();
     const toggle = field('外部への送信に同意する（localhost:11434）').querySelector('input');
     expect(toggle.checked).toBe(true);
     toggle.checked = false; toggle.dispatchEvent(new window.Event('change')); await flush();
@@ -260,7 +267,7 @@ describe('AI settings tab', () => {
 
   it('refuses a base URL with a path and explains why, keeping the saved one', async () => {
     const { plugin } = open({ ai: ai() });
-    tab(plugin); await flush();
+    await tab(plugin); await flush();
     const url = field('生成：接続先').querySelector('input');
     url.value = 'http://localhost:11434/v1'; url.dispatchEvent(new window.Event('input')); await flush();
     expect(field('生成：接続先').querySelector('.kioku-settings-status').textContent).toContain('/v1 などのパスは付けません');
@@ -279,7 +286,7 @@ describe('AI settings tab', () => {
     const consent = 'jev|api.typesafe.ai|jev-latest';
     const { plugin } = open({ ai: ai({ providers: { local: { model: 'qwen3:8b' }, jev: { apiKey: KEY, consent } } }) });
     network.respond = (request) => (request.url.includes('typesafe') ? jev(0.95) : chat(CARDS));
-    tab(plugin); await flush();
+    await tab(plugin); await flush();
     const model = () => field('Jev：モデル名').querySelector('input');
     const jevConsent = () => field('外部への送信に同意する（api.typesafe.ai）').querySelector('input');
     expect(model().value).toBe('jev-latest');
@@ -313,7 +320,7 @@ describe('AI settings tab', () => {
     const consent = 'jev|api.typesafe.ai|jev-latest';
     const { plugin } = open({ ai: ai({ providers: { local: { model: 'qwen3:8b' }, jev: { apiKey: KEY, consent } },
       timeouts: { generateSeconds: 90, judgeSeconds: 30 } }) });
-    tab(plugin); await flush();
+    await tab(plugin); await flush();
     const generate = field('タイムアウト：生成').querySelector('input');
     expect([generate.type, generate.min, generate.value]).toEqual(['number', '1', '90']);
     expect(field('タイムアウト：判定').querySelector('input').value).toBe('30');
@@ -342,7 +349,7 @@ describe('AI settings tab', () => {
     const consent = 'jev|api.typesafe.ai|jev-latest';
     const { plugin } = open({ ai: ai({ providers: { local: { model: 'qwen3:8b' }, jev: { apiKey: KEY, consent } },
       timeouts: { generateSeconds: 60, judgeSeconds: 20 } }) });
-    tab(plugin); await flush();
+    await tab(plugin); await flush();
 
     await typeInto('タイムアウト：生成', '600', { blur: true });
     expect(plugin.data.ai.timeouts.generateSeconds).toBe(600);
@@ -366,7 +373,7 @@ describe('AI settings tab', () => {
 
   it('timeout saving only on blur: typing "6" does not save 6, only blur saves after validating the final value', async () => {
     const { plugin } = open({ ai: ai({ timeouts: { generateSeconds: 60, judgeSeconds: 20 } }) });
-    tab(plugin); await flush();
+    await tab(plugin); await flush();
 
     await typeInto('タイムアウト：生成', '6', { blur: false });
     expect(plugin.data.ai.timeouts.generateSeconds).toBe(60);
@@ -380,7 +387,7 @@ describe('AI settings tab', () => {
 
   it('timeout fields: empty blur does not save and does not show a message', async () => {
     const { plugin } = open({ ai: ai({ timeouts: { generateSeconds: 90, judgeSeconds: 30 } }) });
-    tab(plugin); await flush();
+    await tab(plugin); await flush();
 
     await typeInto('タイムアウト：生成', '', { blur: true });
     expect(plugin.data.ai.timeouts.generateSeconds).toBe(90);
@@ -391,18 +398,21 @@ describe('AI settings tab', () => {
     expect(field('タイムアウト：判定').querySelector('.kioku-settings-status').textContent).toBe('');
   });
 
-  it.skip('timeout fields: "1e" rejects and resets to saved value with message, "0600" and "007" normalize to saved value', async () => {
+  it('timeout fields: "1e" rejects and resets to saved value with message, "0600" and "007" normalize to saved value', async () => {
     const { plugin } = open({ ai: ai({ timeouts: { generateSeconds: 60, judgeSeconds: 20 } }) });
-    tab(plugin); await flush();
+    await tab(plugin); await flush();
 
     const generateInput = field('タイムアウト：生成').querySelector('input');
+    generateInput.type = 'text';
     generateInput.value = '1e';
     generateInput.dispatchEvent(new window.Event('change'));
-    await vi.advanceTimersByTimeAsync(100);
+    await flush();
+    await vi.runAllTimersAsync();
     expect(plugin.data.ai.timeouts.generateSeconds).toBe(60);
     expect(field('タイムアウト：生成').querySelector('.kioku-settings-status').textContent).toContain('1〜600 秒の範囲で入力してください');
     expect(generateInput.value).toBe('60');
 
+    generateInput.type = 'number';
     await typeInto('タイムアウト：生成', '0600', { blur: true });
     await flush();
     expect(plugin.data.ai.timeouts.generateSeconds).toBe(600);
@@ -416,7 +426,7 @@ describe('AI settings tab', () => {
 
   it('timeout fields in both judge modes: generation when judge=none, both when judge=jev', async () => {
     const { plugin } = open({ ai: ai({ judge: 'none', timeouts: { generateSeconds: 45, judgeSeconds: 15 } }) });
-    tab(plugin); await flush();
+    await tab(plugin); await flush();
 
     expect(field('タイムアウト：生成')).not.toBeNull();
     expect(field('タイムアウト：判定')).toBeUndefined();
@@ -444,7 +454,7 @@ describe('AI settings tab', () => {
 
   it('timeout field focus: spin and arrow keys do not lose focus or trigger a full redraw', async () => {
     const { plugin } = open({ ai: ai({ timeouts: { generateSeconds: 60, judgeSeconds: 20 } }) });
-    tab(plugin); await flush();
+    await tab(plugin); await flush();
     const generateInput = field('タイムアウト：生成').querySelector('input');
 
     generateInput.focus();
@@ -459,7 +469,7 @@ describe('AI settings tab', () => {
   it('Jev model name: normalizes to lowercase, empty defaults to jev-latest, no focus loss during typing', async () => {
     const consent = 'jev|api.typesafe.ai|jev-latest';
     const { plugin } = open({ ai: ai({ providers: { local: { model: 'qwen3:8b' }, jev: { apiKey: KEY, consent } } }) });
-    tab(plugin); await flush();
+    await tab(plugin); await flush();
     const modelInput = field('Jev：モデル名').querySelector('input');
 
     modelInput.value = 'J';
@@ -483,37 +493,39 @@ describe('AI settings tab', () => {
     expect(plugin.data.ai.providers.jev.model).toBe('jev-latest');
   });
 
-  it.skip('timeout field: catches error from previous save failure without repeating notice', async () => {
+  it('timeout field: catches error from previous save failure without repeating notice', async () => {
     const { plugin } = open({ ai: ai({ timeouts: { generateSeconds: 60, judgeSeconds: 20 } }) });
-    const originalSave = plugin.saveSettings.bind(plugin);
+    const originalSaveData = plugin.saveData.bind(plugin);
     let saveCount = 0;
-    plugin.saveSettings = async function () {
+    plugin.saveData = async function (data) {
       saveCount += 1;
       if (saveCount === 1) {
         throw new Error('mock save failure');
       }
-      return originalSave();
+      return originalSaveData(data);
     };
-    tab(plugin); await flush();
+    await tab(plugin); await flush();
 
     await typeInto('タイムアウト：判定', '45', { blur: true });
     await flush();
-    const notices = [...document.querySelectorAll('.notice')];
-    const saveFailureCount = notices.filter((n) => n.textContent.includes('保存できませんでした')).length;
+    await vi.runAllTimersAsync();
+    const saveFailureCount = notices.filter((n) => n.includes('保存できませんでした')).length;
     expect(saveFailureCount).toBeGreaterThanOrEqual(1);
+    expect(plugin.data.ai.timeouts.judgeSeconds).toBe(20);
+    expect(field('タイムアウト：判定').querySelector('input').value).toBe('20');
 
     await typeInto('タイムアウト：判定', '900', { blur: true });
     await flush();
+    await vi.runAllTimersAsync();
     expect(field('タイムアウト：判定').querySelector('.kioku-settings-status').textContent).toContain('1〜600 秒の範囲で入力してください');
-    const noticesAfter = [...document.querySelectorAll('.notice')];
-    const saveFailureCountAfter = noticesAfter.filter((n) => n.textContent.includes('保存できませんでした')).length;
+    const saveFailureCountAfter = notices.filter((n) => n.includes('保存できませんでした')).length;
     expect(saveFailureCountAfter).toBe(saveFailureCount);
   });
 
   it('the generation timeout saved here is the one a run waits for', async () => {
     const { plugin } = open({ ai: ai() });
     network.respond = () => new Promise(() => {});
-    tab(plugin); await flush();
+    await tab(plugin); await flush();
     await typeInto('タイムアウト：生成', '5', { blur: true });
     expect(plugin.data.ai.timeouts).toEqual({ generateSeconds: 5, judgeSeconds: 20 });
     await extract(plugin);
@@ -528,7 +540,7 @@ describe('AI settings tab', () => {
     const consent = 'jev|api.typesafe.ai|jev-latest';
     const { plugin } = open({ ai: ai({ providers: { local: { model: 'qwen3:8b' }, jev: { apiKey: KEY, consent } } }) });
     network.respond = (request) => (request.url.includes('typesafe') ? new Promise(() => {}) : chat(CARDS));
-    tab(plugin); await flush();
+    await tab(plugin); await flush();
     await typeInto('タイムアウト：判定', '3', { blur: true });
     expect(plugin.data.ai.timeouts).toEqual({ generateSeconds: 60, judgeSeconds: 3 });
     await extract(plugin);
