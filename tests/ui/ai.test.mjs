@@ -263,4 +263,100 @@ describe('AI settings tab', () => {
     expect(field('生成：接続先').querySelector('.kioku-settings-status').textContent).toContain('/v1 などのパスは付けません');
     expect(plugin.saved).toEqual([]);
   });
+
+  const typeInto = async (name, value, { blur = false } = {}) => {
+    const input = field(name).querySelector('input');
+    input.value = value; input.dispatchEvent(new window.Event('input'));
+    if (blur) input.dispatchEvent(new window.Event('change'));
+    await flush();
+  };
+
+  it('Jev model: saves the trimmed name (empty → jev-latest); a new name needs consent again and is the one sent', async () => {
+    const consent = 'jev|api.typesafe.ai|jev-latest';
+    const { plugin } = open({ ai: ai({ providers: { local: { model: 'qwen3:8b' }, jev: { apiKey: KEY, consent } } }) });
+    network.respond = (request) => (request.url.includes('typesafe') ? jev(0.95) : chat(CARDS));
+    tab(plugin); await flush();
+    const model = () => field('Jev：モデル名').querySelector('input');
+    const jevConsent = () => field('外部への送信に同意する（api.typesafe.ai）').querySelector('input');
+    expect(model().value).toBe('jev-latest');
+    expect(jevConsent().checked).toBe(true);
+
+    await typeInto('Jev：モデル名', '  jev-2  ', { blur: true });
+    expect(plugin.data.ai.providers.jev).toEqual({ apiKey: KEY, model: 'jev-2', consent });
+    expect(model().value).toBe('jev-2');
+    expect(jevConsent().checked).toBe(false);
+    await extract(plugin);
+    expect(section().querySelector('.kioku-ai-preview').textContent).toContain('判定：なし（Jev への送信に未同意）');
+    document.querySelector('.kioku-candidate-close').click();
+
+    await typeInto('Jev：モデル名', '', { blur: true });
+    expect(plugin.data.ai.providers.jev.model).toBe('jev-latest');
+    expect(model().value).toBe('jev-latest');
+    expect(jevConsent().checked).toBe(true);
+
+    await typeInto('Jev：モデル名', 'jev-2', { blur: true });
+    const toggle = jevConsent();
+    toggle.checked = true; toggle.dispatchEvent(new window.Event('change')); await flush();
+    expect(plugin.data.ai.providers.jev.consent).toBe('jev|api.typesafe.ai|jev-2');
+    expect(network.calls).toEqual([]);
+    await extract(plugin);
+    section().querySelector('.kioku-ai-run').click(); await flush();
+    expect(network.calls.map((call) => new URL(call.url).host)).toEqual(['localhost:11434', 'api.typesafe.ai', 'api.typesafe.ai']);
+    expect(network.calls.slice(1).map((call) => JSON.parse(call.body).model)).toEqual(['jev-2', 'jev-2']);
+  });
+
+  it('timeouts: show the saved seconds, save positive whole seconds keeping the rest of the AI section, ignore 0, negatives and empty', async () => {
+    const consent = 'jev|api.typesafe.ai|jev-latest';
+    const { plugin } = open({ ai: ai({ providers: { local: { model: 'qwen3:8b' }, jev: { apiKey: KEY, consent } },
+      timeouts: { generateSeconds: 90, judgeSeconds: 30 } }) });
+    tab(plugin); await flush();
+    const generate = field('タイムアウト：生成').querySelector('input');
+    expect([generate.type, generate.min, generate.value]).toEqual(['number', '1', '90']);
+    expect(field('タイムアウト：判定').querySelector('input').value).toBe('30');
+
+    await typeInto('タイムアウト：生成', '300');
+    await typeInto('タイムアウト：判定', '45');
+    expect(plugin.data.ai.timeouts).toEqual({ generateSeconds: 300, judgeSeconds: 45 });
+    expect(plugin.data.ai.providers.local.model).toBe('qwen3:8b');
+    expect(plugin.data.ai.providers.jev).toEqual({ apiKey: KEY, model: 'jev-latest', consent });
+
+    const saves = plugin.saved.length;
+    for (const value of ['0', '-5', '']) {
+      await typeInto('タイムアウト：生成', value);
+      await typeInto('タイムアウト：判定', value);
+    }
+    expect(plugin.saved).toHaveLength(saves);
+    expect(plugin.data.ai.timeouts).toEqual({ generateSeconds: 300, judgeSeconds: 45 });
+    expect(network.calls).toEqual([]);
+  });
+
+  it('the generation timeout saved here is the one a run waits for', async () => {
+    const { plugin } = open({ ai: ai() });
+    network.respond = () => new Promise(() => {});
+    tab(plugin); await flush();
+    await typeInto('タイムアウト：生成', '5');
+    expect(plugin.data.ai.timeouts).toEqual({ generateSeconds: 5, judgeSeconds: 20 });
+    await extract(plugin);
+    section().querySelector('.kioku-ai-run').click(); await flush();
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(section().querySelector('.kioku-ai-status').textContent).toBe('生成中…（4 秒）');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(section().querySelector('.kioku-ai-status').textContent).toBe('時間内に応答がありませんでした（Ollama（qwen3:8b）、5 秒）。');
+  });
+
+  it('the judge timeout saved here is the one each Jev call waits for', async () => {
+    const consent = 'jev|api.typesafe.ai|jev-latest';
+    const { plugin } = open({ ai: ai({ providers: { local: { model: 'qwen3:8b' }, jev: { apiKey: KEY, consent } } }) });
+    network.respond = (request) => (request.url.includes('typesafe') ? new Promise(() => {}) : chat(CARDS));
+    tab(plugin); await flush();
+    await typeInto('タイムアウト：判定', '3');
+    expect(plugin.data.ai.timeouts).toEqual({ generateSeconds: 60, judgeSeconds: 3 });
+    await extract(plugin);
+    section().querySelector('.kioku-ai-run').click(); await flush();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(section().querySelector('.kioku-ai-judge-failure')).toBeNull();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(generated().map((item) => item.querySelector('.kioku-ai-badge').textContent)).toEqual(['未判定（タイムアウト）', '未判定（タイムアウト）']);
+    expect(section().querySelector('.kioku-ai-judge-failure').textContent).toBe('時間内に応答がありませんでした（Jev、3 秒）。');
+  });
 });
