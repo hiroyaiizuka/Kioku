@@ -305,7 +305,7 @@ describe('AI settings tab', () => {
     expect(network.calls.slice(1).map((call) => JSON.parse(call.body).model)).toEqual(['jev-2', 'jev-2']);
   });
 
-  it('timeouts: show the saved seconds, save positive whole seconds keeping the rest of the AI section, ignore 0, negatives and empty', async () => {
+  it('timeouts: show the saved seconds, save in-range whole seconds over the latest settings, ignore 0, negatives and empty', async () => {
     const consent = 'jev|api.typesafe.ai|jev-latest';
     const { plugin } = open({ ai: ai({ providers: { local: { model: 'qwen3:8b' }, jev: { apiKey: KEY, consent } },
       timeouts: { generateSeconds: 90, judgeSeconds: 30 } }) });
@@ -314,9 +314,13 @@ describe('AI settings tab', () => {
     expect([generate.type, generate.min, generate.value]).toEqual(['number', '1', '90']);
     expect(field('タイムアウト：判定').querySelector('input').value).toBe('30');
 
+    // Alternating fields without a redraw: each save must start from the latest timeouts, not the drawn ones.
     await typeInto('タイムアウト：生成', '300');
+    expect(plugin.data.ai.timeouts).toEqual({ generateSeconds: 300, judgeSeconds: 30 });
     await typeInto('タイムアウト：判定', '45');
     expect(plugin.data.ai.timeouts).toEqual({ generateSeconds: 300, judgeSeconds: 45 });
+    await typeInto('タイムアウト：生成', '120');
+    expect(plugin.data.ai.timeouts).toEqual({ generateSeconds: 120, judgeSeconds: 45 });
     expect(plugin.data.ai.providers.local.model).toBe('qwen3:8b');
     expect(plugin.data.ai.providers.jev).toEqual({ apiKey: KEY, model: 'jev-latest', consent });
 
@@ -326,7 +330,7 @@ describe('AI settings tab', () => {
       await typeInto('タイムアウト：判定', value);
     }
     expect(plugin.saved).toHaveLength(saves);
-    expect(plugin.data.ai.timeouts).toEqual({ generateSeconds: 300, judgeSeconds: 45 });
+    expect(plugin.data.ai.timeouts).toEqual({ generateSeconds: 120, judgeSeconds: 45 });
     expect(network.calls).toEqual([]);
   });
 
