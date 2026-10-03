@@ -418,6 +418,66 @@ describe('Kioku wiring (opt-in)', () => {
     expect(historyEvents(queueDir)).toEqual(['acquired', 'released']);
   }, realProcessTimeout);
 
+  describe('a failing step always reaches the caller as a non-zero exit', () => {
+    const cleanEnv = (extra) => {
+      const env = { ...process.env };
+      // Strip a surrounding hook's GIT_* (e.g. GIT_INDEX_FILE when this suite runs inside pre-commit) and any held token.
+      for (const key of Object.keys(env)) if (key.startsWith('GIT_') || key === tokenVariable || key === 'KIOKU_HEAVY_QUEUE') delete env[key];
+      return { ...env, ...extra };
+    };
+    const fakeNpm = (body) => { const file = join(scratch(), 'fake-npm.mjs'); writeFileSync(file, body); return file; };
+    const failures = [['exit 1', 'process.exit(1);', 1], ['exit 3', 'process.exit(3);', 3],
+      ['killed by a signal', "process.kill(process.pid, 'SIGKILL');", 1]];
+
+    it('scripts/check.mjs, with and without the queue, exits non-zero and the queued slot is still released', () => {
+      for (const queued of [false, true]) {
+        for (const [label, body, expected] of failures) {
+          const queueDir = join(scratch(), 'queue');
+          const result = spawnSync(process.execPath, ['scripts/check.mjs'], { cwd: project, encoding: 'utf8',
+            env: cleanEnv({ npm_execpath: fakeNpm(body), ORCA_HEAVY_QUEUE_DIR: queueDir, ...(queued ? { KIOKU_HEAVY_QUEUE: '1' } : {}) }) });
+          expect(result.status, `${queued ? 'queued' : 'opt-out'} ${label}: ${result.stderr}`).toBe(expected);
+          if (queued) {
+            expect(existsSync(join(queueDir, 'owner.json'))).toBe(false);
+            expect(historyEvents(queueDir)).toEqual(['acquired', 'released']);
+          } else expect(existsSync(queueDir)).toBe(false);
+        }
+      }
+    }, realProcessTimeout);
+
+    it('the generic CLI returns the command\'s exit status and refuses with 1', () => {
+      const dir = join(scratch(), 'queue'); const env = cleanEnv({ ORCA_HEAVY_QUEUE_DIR: dir });
+      const run4 = spawnSync(process.execPath, [cli, 'run', '--project', 'p', '--job', 'check', '--', process.execPath, '-e', 'process.exit(4)'],
+        { cwd: scratch(), encoding: 'utf8', env });
+      expect(run4.status, run4.stderr).toBe(4);
+      const missing = spawnSync(process.execPath, [cli, 'run', '--project', 'p', '--job', 'check', '--', join(scratch(), 'no-such-command')],
+        { cwd: scratch(), encoding: 'utf8', env });
+      expect(missing.status).toBe(1); expect(missing.stderr).toMatch(/could not start/u);
+      const usage = spawnSync(process.execPath, [cli, 'run', '--job', 'check'], { cwd: scratch(), encoding: 'utf8', env });
+      expect(usage.status).toBe(1); expect(usage.stderr).toMatch(/Heavy-job queue refused: Usage/u);
+      expect(existsSync(join(dir, 'owner.json'))).toBe(false);
+    }, realProcessTimeout);
+
+    it('git commit → .githooks/pre-commit → npm run check → check:steps: a failing step blocks the commit', () => {
+      for (const [steps, blocked] of [['node -e "process.exit(5)"', true], ['node -e "process.exit(0)"', false]]) {
+        const repo = scratch(); const queueDir = join(scratch(), 'queue');
+        mkdirSync(join(repo, '.githooks'));
+        writeFileSync(join(repo, '.githooks', 'pre-commit'), readFileSync(join(project, '.githooks', 'pre-commit')), { mode: 0o755 });
+        writeFileSync(join(repo, 'package.json'), JSON.stringify({ name: 'hook-probe', private: true,
+          scripts: { check: `node ${JSON.stringify(join(project, 'scripts', 'check.mjs'))}`, 'check:steps': steps } }));
+        const env = cleanEnv({ ORCA_HEAVY_QUEUE_DIR: queueDir });
+        const git = (...args) => spawnSync('git', ['-c', 'user.name=probe', '-c', 'user.email=probe@example.invalid', ...args],
+          { cwd: repo, encoding: 'utf8', env });
+        expect(git('init', '-q').status).toBe(0);
+        expect(git('config', 'core.hooksPath', '.githooks').status).toBe(0);
+        expect(git('add', '.').status).toBe(0);
+        const commit = git('commit', '-q', '-m', 'probe');
+        expect(commit.status !== 0, `${steps}: ${commit.stderr}`).toBe(blocked);
+        expect(git('rev-parse', '--verify', '-q', 'HEAD').status !== 0).toBe(blocked);
+        expect(existsSync(queueDir)).toBe(false);
+      }
+    }, realProcessTimeout);
+  });
+
   it('harness:launch hands the native slot to the dedicated PID, which keeps it after the launch CLI exits', async () => {
     const host = fakeHost(); const dir = scratch(); const env = { ORCA_HEAVY_QUEUE_DIR: dir };
     const launched = await launchWithQueue('/w/kioku', env, async () => {

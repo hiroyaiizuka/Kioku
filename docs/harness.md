@@ -11,6 +11,8 @@
 | build/package | `npm run build && npm run package` | 共通 recipe の browser production bundle（ts-fsrs を bundle し MIT 表示を先頭に保持、external は `obsidian` だけ）、現入力から write:false で再生成した期待 bytes/imports と4配布物を比較。dist の自己申告 hash だけでは認定しない |
 | all | `npm run check` | 上記（`check:steps`）を順に実行。実機は起動しない。`KIOKU_HEAVY_QUEUE=1` のときだけ Mac 全体の順番待ちの中で実行 |
 
+検証コマンドの終了コードをパイプで隠さない（`| grep`・`| tail` で絞るときは `set -o pipefail`、全出力はファイルに残す）。失敗した実行の後の commit は gate を通ったことにならない。`scripts/check.mjs`、`.githooks/pre-commit`、`scripts/heavy-queue/cli.mjs` が失敗（signal による終了を含む）を 0 以外の終了コードで呼び出し元へ返すことは、単体テストで固定している。
+
 CI は `npm ci` と `npm run check` を実行し dist を検査用 artifact にするだけで、公開しない。`npm run hooks:install` は Git worktree 作成後だけ任意で使え、pre-commit が同じ check を必ず実行する。
 
 ## 専用 test-vault
