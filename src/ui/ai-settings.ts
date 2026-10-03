@@ -125,23 +125,31 @@ export function renderAiSettings(containerEl: HTMLElement, section: AiSettingsSe
         const status = text.inputEl.parentElement!.parentElement!.createDiv({ cls: 'kioku-settings-status' });
         text.setPlaceholder('60').setValue(String(ai.timeouts.generateSeconds));
         text.inputEl.addEventListener('change', guarded(async () => {
-          const value = text.inputEl.value;
+          const value = text.inputEl.value.trim();
+          if (!value) return;
           if (!/^\d+$/.test(value)) {
-            if (value.trim()) {
-              status.setText('1〜600 秒の範囲で入力してください。');
+            status.setText('1〜600 秒の範囲で入力してください。');
+            try {
               await lastSave;
-              const latest = section.current;
-              text.setValue(String(latest.timeouts.generateSeconds));
+            } catch {
+              // Ignore previous save failure
             }
+            const latest = section.current;
+            text.setValue(String(latest.timeouts.generateSeconds));
             return;
           }
           const seconds = Number.parseInt(value, 10);
           if (Number.isFinite(seconds) && seconds >= 1 && seconds <= 600) {
             await save((latest) => ({ ...latest, timeouts: { ...latest.timeouts, generateSeconds: seconds } }));
             status.setText('');
+            text.setValue(String(seconds));
           } else {
             status.setText('1〜600 秒の範囲で入力してください。');
-            await lastSave;
+            try {
+              await lastSave;
+            } catch {
+              // Ignore previous save failure
+            }
             const latest = section.current;
             text.setValue(String(latest.timeouts.generateSeconds));
           }
@@ -196,23 +204,31 @@ export function renderAiSettings(containerEl: HTMLElement, section: AiSettingsSe
       const status = text.inputEl.parentElement!.parentElement!.createDiv({ cls: 'kioku-settings-status' });
       text.setPlaceholder('60').setValue(String(ai.timeouts.generateSeconds));
       text.inputEl.addEventListener('change', guarded(async () => {
-        const value = text.inputEl.value;
+        const value = text.inputEl.value.trim();
+        if (!value) return;
         if (!/^\d+$/.test(value)) {
-          if (value.trim()) {
-            status.setText('1〜600 秒の範囲で入力してください。');
+          status.setText('1〜600 秒の範囲で入力してください。');
+          try {
             await lastSave;
-            const latest = section.current;
-            text.setValue(String(latest.timeouts.generateSeconds));
+          } catch {
+            // Ignore previous save failure
           }
+          const latest = section.current;
+          text.setValue(String(latest.timeouts.generateSeconds));
           return;
         }
         const seconds = Number.parseInt(value, 10);
         if (Number.isFinite(seconds) && seconds >= 1 && seconds <= 600) {
           await save((latest) => ({ ...latest, timeouts: { ...latest.timeouts, generateSeconds: seconds } }));
           status.setText('');
+          text.setValue(String(seconds));
         } else {
           status.setText('1〜600 秒の範囲で入力してください。');
-          await lastSave;
+          try {
+            await lastSave;
+          } catch {
+            // Ignore previous save failure
+          }
           const latest = section.current;
           text.setValue(String(latest.timeouts.generateSeconds));
         }
@@ -228,23 +244,31 @@ export function renderAiSettings(containerEl: HTMLElement, section: AiSettingsSe
       const status = text.inputEl.parentElement!.parentElement!.createDiv({ cls: 'kioku-settings-status' });
       text.setPlaceholder('20').setValue(String(ai.timeouts.judgeSeconds));
       text.inputEl.addEventListener('change', guarded(async () => {
-        const value = text.inputEl.value;
+        const value = text.inputEl.value.trim();
+        if (!value) return;
         if (!/^\d+$/.test(value)) {
-          if (value.trim()) {
-            status.setText('1〜600 秒の範囲で入力してください。');
+          status.setText('1〜600 秒の範囲で入力してください。');
+          try {
             await lastSave;
-            const latest = section.current;
-            text.setValue(String(latest.timeouts.judgeSeconds));
+          } catch {
+            // Ignore previous save failure
           }
+          const latest = section.current;
+          text.setValue(String(latest.timeouts.judgeSeconds));
           return;
         }
         const seconds = Number.parseInt(value, 10);
         if (Number.isFinite(seconds) && seconds >= 1 && seconds <= 600) {
           await save((latest) => ({ ...latest, timeouts: { ...latest.timeouts, judgeSeconds: seconds } }));
           status.setText('');
+          text.setValue(String(seconds));
         } else {
           status.setText('1〜600 秒の範囲で入力してください。');
-          await lastSave;
+          try {
+            await lastSave;
+          } catch {
+            // Ignore previous save failure
+          }
           const latest = section.current;
           text.setValue(String(latest.timeouts.judgeSeconds));
         }
