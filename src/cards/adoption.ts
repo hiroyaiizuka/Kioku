@@ -18,7 +18,7 @@ export function normalizeField(value: string): string {
   return value.split(/\r\n|\r|\n/).map((line) => line.trimEnd()).join('\n').trim();
 }
 
-function serializeCard(card: CardText, eol: string): string {
+export function serializeCard(card: CardText, eol: string): string {
   return `Q: ${card.question}\nA: ${card.answer}`.split('\n').map((line) => line.trimEnd()).join(eol);
 }
 

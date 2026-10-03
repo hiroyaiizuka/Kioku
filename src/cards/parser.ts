@@ -3,6 +3,8 @@ import { classifyLines, type ExclusionKind } from './regions';
 
 export const CARD_ID_PREFIX = 'kioku-';
 export const EDIT_RECORD_PREFIX = '%%kioku-edit:';
+/** Quote record written after a generated card (docs/m3-design.md §9). */
+export const SOURCE_RECORD_PREFIX = '%%kioku-src:';
 
 const QUESTION = /^\uFEFF?(?:[-*+][ \t]+)?(?:Q|Ｑ|問)[ \t]*[:：][ \t]*(.*)$/u;
 const ANSWER = /^(?:[-*+][ \t]+)?(?:A|Ａ|答)[ \t]*[:：][ \t]*(.*)$/u;
@@ -167,10 +169,13 @@ export function extractCandidates(text: string, range?: Range): Candidate[] {
   return marked.filter((item) => item.start < to && item.end > from);
 }
 
-/** Every Kioku ID present in the note (block IDs and edit records), to avoid collisions. */
+/**
+ * Every Kioku ID present in the note (block IDs, edit records and quote records), to avoid
+ * collisions; an ID left behind in a record of a deleted card is never reused.
+ */
 export function existingCardIds(text: string): Set<string> {
   const ids = new Set<string>();
-  for (const match of text.matchAll(/(?:\^|%%kioku-edit:)(kioku-[A-Za-z0-9-]+)/g)) {
+  for (const match of text.matchAll(/(?:\^|%%kioku-edit:|%%kioku-src:)(kioku-[A-Za-z0-9-]+)/g)) {
     if (match[1]) ids.add(match[1]);
   }
   return ids;

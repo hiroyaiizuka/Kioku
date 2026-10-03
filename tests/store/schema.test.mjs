@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { emptyState, missingAppliedHistory, parseHistory, parseState, replayHistory, serializeEvent, serializeState } from '../../src/store/schema.ts';
 import { DEFAULT_SETTINGS, SettingsStore, normalizeDataFolder, parseSettings } from '../../src/store/settings.ts';
+import { DEFAULT_AI_SETTINGS } from '../../src/ai/settings.ts';
 import { event } from '../helpers/events.mjs';
 
 const lines = (...events) => events.map(serializeEvent).join('');
@@ -110,9 +111,10 @@ describe('replay from history (history is the source of truth)', () => {
 describe('settings (data.json)', () => {
   it('fills defaults and validates fields', () => {
     expect(parseSettings(undefined)).toEqual(DEFAULT_SETTINGS);
-    expect(DEFAULT_SETTINGS).toEqual({ schemaVersion: 1, triggerTags: ['kioku'], dayStartHour: 4, newPerDay: 20, dataFolder: 'Kioku' });
+    expect(DEFAULT_SETTINGS).toEqual({ schemaVersion: 1, triggerTags: ['kioku'], dayStartHour: 4, newPerDay: 20, dataFolder: 'Kioku',
+      ai: DEFAULT_AI_SETTINGS });
     expect(parseSettings({ triggerTags: ['#Deck', 'deck', 7], dayStartHour: 0, newPerDay: null, dataFolder: '/学習/Kioku/' }))
-      .toEqual({ schemaVersion: 1, triggerTags: ['Deck'], dayStartHour: 0, newPerDay: null, dataFolder: '学習/Kioku' });
+      .toEqual({ schemaVersion: 1, triggerTags: ['Deck'], dayStartHour: 0, newPerDay: null, dataFolder: '学習/Kioku', ai: DEFAULT_AI_SETTINGS });
     expect(parseSettings({ triggerTags: [], dayStartHour: 24, newPerDay: -1, dataFolder: '../x' })).toEqual(DEFAULT_SETTINGS);
     expect(['', ' / ', '.obsidian', 'a/../b', 'a:b'].map(normalizeDataFolder)).toEqual([null, null, null, null, null]);
   });

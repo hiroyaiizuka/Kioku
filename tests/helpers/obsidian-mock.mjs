@@ -56,6 +56,7 @@ class MockSetting {
   }
   setName(name) { this.nameEl.textContent = name; return this; }
   setDesc(desc) { this.descEl.textContent = desc; return this; }
+  setHeading() { this.settingEl.classList.add('setting-item-heading'); return this; }
   addText(build) {
     const inputEl = this.controlEl.createEl('input', { cls: 'mock-text' });
     const text = { inputEl,
@@ -139,7 +140,21 @@ export function installDom() {
   return dom;
 }
 
+/**
+ * Every `requestUrl` call the plugin makes, in order. By default a call fails like an unreachable
+ * server; tests that exercise AI set `network.respond` (request param → response or thrown error).
+ */
+export const network = { calls: [], respond: null };
+
 export async function compilePlugin(source, notices) {
+  network.calls.length = 0;
+  network.respond = null;
+  const requestUrl = async (param) => {
+    network.calls.push(param);
+    if (!network.respond) throw new Error('net::ERR_CONNECTION_REFUSED');
+    const answer = await network.respond(param);
+    return { status: answer.status, headers: answer.headers ?? {}, text: answer.text ?? '', json: undefined, arrayBuffer: new ArrayBuffer(0) };
+  };
   const result = await build({ stdin: { contents: source, resolveDir: join(process.cwd(), 'src'), sourcefile: 'main.ts', loader: 'ts' },
     bundle: true, write: false, platform: 'browser', format: 'cjs',
     external: ['obsidian'], define: { __KIOKU_VERSION__: '"0.0.1"', __KIOKU_BUILD_ID__: '"unit-build"' } });
@@ -158,11 +173,12 @@ export async function compilePlugin(source, notices) {
   }
   const obsidian = { Plugin: MockPlugin, Modal: MockModal, MarkdownView: MockMarkdownView, Notice: MockNotice, TFile: MockTFile,
     Component: MockComponent, MarkdownRenderer: MockMarkdownRenderer, parseFrontMatterTags, PluginSettingTab: MockPluginSettingTab,
-    Setting: MockSetting };
+    Setting: MockSetting, requestUrl };
   const module = { exports: {} };
   // Timers resolve globalThis at call time so vitest fake timers control the plugin's window timers.
-  const timers = { setTimeout: (...args) => globalThis.setTimeout(...args), clearTimeout: (id) => globalThis.clearTimeout(id) };
-  const context = { module, exports: module.exports, crypto: globalThis.crypto, window: timers, AbortController: globalThis.AbortController,
+  const timers = { setTimeout: (...args) => globalThis.setTimeout(...args), clearTimeout: (id) => globalThis.clearTimeout(id),
+    setInterval: (...args) => globalThis.setInterval(...args), clearInterval: (id) => globalThis.clearInterval(id) };
+  const context = { module, exports: module.exports, crypto: globalThis.crypto, window: timers, AbortController: globalThis.AbortController, URL: globalThis.URL,
     TextEncoder: globalThis.TextEncoder, require: (id) => { if (id === 'obsidian') return obsidian; throw new Error(id); }, console };
   // The plugin's Date is the test's Date at call time, so vitest fake time controls Kioku days.
   Object.defineProperty(context, 'Date', { get: () => globalThis.Date });
