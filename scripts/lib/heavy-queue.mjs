@@ -56,7 +56,15 @@ export async function launchWithQueue(root, env, launch, system = defaultSystem,
     for (const signal of signals) process.on(signal, ignore);
   };
   const onSpawned = (pid) => {
-    try { handed = handOff(queue, ticketId, pid); handOffError = null; } catch (error) { handOffError = error; ignoreSignals(); }
+    try { handed = handOff(queue, ticketId, pid); handOffError = null; }
+    catch (error) {
+      handOffError = error;
+      if (!ignoring) {
+        system.log(`[heavy-queue] GUARD: the native slot could not be handed to the dedicated pid ${pid} (${error.message}); `
+          + `this command (pid ${system.pid}) keeps it and ignores SIGINT / SIGTERM / SIGHUP until the launch settles.`);
+      }
+      ignoreSignals();
+    }
   };
   // Loaded only here, so the opt-out paths (e.g. scripts/check.mjs) never import the harness / esbuild modules.
   const inspect = options.instance ?? (async () => (await import('./obsidian-instance.mjs')).recordedInstance(root));
@@ -65,7 +73,14 @@ export async function launchWithQueue(root, env, launch, system = defaultSystem,
   const attempt = async (retried, note) => {
     let instance;
     try { instance = await inspect(); }
-    catch (error) { note(`cannot tell whether a dedicated instance runs (${error.message})`); return null; }
+    catch (error) {
+      // harness:quit reads the same state file and ps (recordedInstance), so it cannot end this case: say what can.
+      note(`cannot tell whether a dedicated instance runs (${error.message})`, 'npm run harness:quit cannot settle this '
+        + '(it reads the same state file and ps). Inspect / repair the dedicated state file under .tooling/ and ps; once they '
+        + 'work, this command continues by itself. Only after you have confirmed that no process uses the dedicated profile '
+        + `(.tooling/obsidian-profile), stop it with kill -KILL ${system.pid}: the next waiter then recovers the slot.`);
+      return null;
+    }
     if (!instance.running) {
       let released;
       try { released = release(queue, ticketId, 'released-after-failed-launch'); }
@@ -87,14 +102,15 @@ export async function launchWithQueue(root, env, launch, system = defaultSystem,
   // Until the slot is handed over or no dedicated instance runs, this live process stays the owner (see above).
   const guard = async () => {
     let lastNote = null; let lastReport = -Infinity;
-    const note = (reason) => {
+    const quitRemedy = 'To stop, run npm run harness:quit in another terminal (this command then sees the instance gone, '
+      + 'releases the slot and exits).';
+    const note = (reason, remedy = quitRemedy) => {
       const now = system.monotonic();
       if (reason === lastNote && now - lastReport < reportEveryMs) return;
       lastNote = reason; lastReport = now;
       system.log(`[heavy-queue] GUARD: ${reason}. This command (pid ${system.pid}) keeps the native slot and retries every `
-        + `${formatDuration(guardMs)} until the slot is handed to the dedicated instance or no dedicated instance runs. To stop, `
-        + 'run npm run harness:quit in another terminal (this command then releases the slot and exits). Signals are ignored '
-        + 'meanwhile; SIGKILL would let another heavy job start while Obsidian may still run.');
+        + `${formatDuration(guardMs)} until the slot is handed to the dedicated instance or no dedicated instance runs. ${remedy} `
+        + 'SIGINT / SIGTERM / SIGHUP are ignored meanwhile; SIGKILL would let another heavy job start while Obsidian may still run.');
     };
     ignoreSignals(); // Before the first await (inspect): the owner record still names this process.
     const first = await attempt(false, note);

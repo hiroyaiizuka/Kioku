@@ -968,7 +968,9 @@ describe('harness:launch never leaves a running dedicated instance without the n
       const viewer = openQueue(dir, host.proc(1704));
       expect(readOwner(viewer)).toMatchObject({ pid: 1701, job: 'native', worktree: '/w/kioku' });
       expect(status(viewer).owner.live).toBe(true);
-      expect(host.logs.find((line) => /GUARD/u.test(line))).toMatch(/pid 4400\) still runs but the slot could not be handed[\s\S]*EIO/u);
+      // Here the instance can be judged, so harness:quit does end the guard.
+      expect(host.logs.find((line) => /GUARD: a dedicated instance/u.test(line)))
+        .toMatch(/pid 4400\) still runs but the slot could not be handed[\s\S]*EIO[\s\S]*run npm run harness:quit in another terminal/u);
       expect(process.listenerCount('SIGINT')).toBe(listeners + 1); // Ignored while guarding.
 
       if (end === 'instance gone') { probe.running = false; host.table.delete(4400); }
@@ -1014,6 +1016,8 @@ describe('harness:launch never leaves a running dedicated instance without the n
       host.table.set(4700, obsidian); onSpawned(4700); await page; throw new Error('Timed out waiting for the dedicated page');
     }, { guardMs: 1000, instance: inspect });
     await settle(() => host.queried.includes(4700)); // handOff was attempted (and failed) right after the spawn.
+    expect(host.logs.filter((line) => /GUARD/u.test(line))).toEqual([expect.stringMatching(
+      /could not be handed to the dedicated pid 4700 \(EIO[\s\S]*ignores SIGINT \/ SIGTERM \/ SIGHUP until the launch settles/u)]);
     // Still waiting for the page: the owner is this launcher, so signals are already ignored.
     for (const signal of signals) expect(added(signal)).toHaveLength(1);
     deliver();
@@ -1088,7 +1092,11 @@ describe('harness:launch never leaves a running dedicated instance without the n
     const waiter = track(acquire(openQueue(dir, host.proc(1902)), request('/w/other')));
     await settle(() => calls > 4 && host.queried.filter((pid) => pid === 1901).length > 4);
     expect(launcher.done).toBe(false); expect(waiter.done).toBe(false);
-    expect(host.logs.find((line) => /GUARD/u.test(line))).toMatch(/cannot tell whether a dedicated instance runs/u);
+    const guardLine = host.logs.find((line) => /GUARD/u.test(line));
+    expect(guardLine).toMatch(/cannot tell whether a dedicated instance runs/u);
+    // harness:quit reads the same state file and ps, so the message must not promise that it releases the slot.
+    expect(guardLine).toMatch(/npm run harness:quit cannot settle this[\s\S]*Inspect \/ repair the dedicated state file[\s\S]*kill -KILL 1901/u);
+    expect(guardLine).not.toMatch(/releases the slot and exits/u);
     broken = false;
     expect((await launcher.promise).error.message).toMatch(/preflight failed[\s\S]*native slot released \(no dedicated instance runs now\)/u);
     expect((await waiter.promise).owner.pid).toBe(1902);
