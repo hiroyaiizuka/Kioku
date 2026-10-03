@@ -69,10 +69,21 @@ opt-out のときに同じであることを保証するのは、各手順の終
 - 置き場所: `ORCA_HEAVY_QUEUE_DIR`（正規化済み絶対 path）、既定は `~/Library/Caches/orca-heavy-queue/`（macOS 以外は `~/.cache/orca-heavy-queue/`）。mode 0700、本人 uid、group/other 書き込み不可でなければ拒否する。git 管理外で、使っていないときは消してよい。
 - **スロットは 1 つ**（check と native で共有）。Mappy の制約「Obsidian 実機は 2 プロジェクト合計で同時に 1 台」は native を 1 スロットに入れれば満たせる。それに加えて、Mappy LEV-251 では高負荷が原因で順序の競合が起き、テストが落ちた。別プロジェクトの check が E2E と同時に走ると、実機の結果そのものが信用できなくなる。スロットが 1 つならロックの取得順の規則が要らず、入れ子は下の再入だけになる。代償として、ある worktree が native を持つ間（launch から quit まで）は、ほかの worktree の check が待つ。
 - 包む範囲: `npm run check`（pre-commit、`harness:prepare`/`harness:update` の中の check を含む）は check の間だけ持つ。`harness:launch` は native を取ってから起動し、起動に成功したら所有者を**専用 Obsidian の PID** に引き渡す（launch の CLI が終わっても保持される）。`harness:quit` は先に quit を実行し（キューが壊れていても Obsidian は止める）、その PID が消えていれば解放する。quit が時間切れになり PID が生きていれば保持したまま。`harness:e2e:smoke` は、この worktree が生きた native を持つときだけ動き、所有者を記録 JSON の `heavyQueue` に残す（baseline は対象外）。
-- 記録: `owner.json`（project、worktree、pid、コマンド行の SHA-256、実行ファイル名、ps の開始時刻、job、seq、enqueuedAt、startedAt、waitedMs、引き渡し後は launcher）、`tickets/<seq>-<uuid>.json`（待ち行列）、`history.jsonl`（acquired、released、handed-off、recovered-*、overdue、待ち時間と保持時間）。作成は一時ファイルの hard link（排他）か rename で行い、書きかけの記録は見えない。
+- 記録: `owner/<gen>.json`（所有者。project、worktree、pid、コマンド行の SHA-256、実行ファイル名、ps の開始時刻、job、seq、enqueuedAt、startedAt、waitedMs、引き渡し後は launcher）、`tickets/<seq>-<uuid>.json`（待ち行列）、`enqueue/<gen>.json`（seq を割り当てる間の lease）、`history.jsonl`（acquired、released、handed-off、recovered-*、overdue、待ち時間と保持時間）。作成は一時ファイルの hard link（排他）か rename で行い、書きかけの記録は見えない。以前の配置（`owner.json`、`enqueue.lock`、`stale/`）が残っていれば拒否する。
+- **所有者は 1 人（世代 lease）**: 所有者と enqueue ロックは、どちらも「世代」のファイルで表す。共有の固定名（`owner.json`）を古い判断で rename・削除すると、その間に入れ替わった生きた所有者を隠し、3 人目を入れてしまう。これを避けるため、生きた保持者のファイルを他人が rename・置き換え・削除することは一度もない。
+  - 各保持者のファイル名は固有で、`最大の世代 + 1` を排他作成したときだけ生まれる。
+  - 現在の保持者は最大の世代。ただし `<gen>.released` があるか、PID が死んでいる・使い回されているときは空きとみなす。
+  - 奪うときは、まず判定した世代のバイトが変わっていないことを読み直して確かめる。自分のファイルを書き換えるのは生きた保持者だけ（handOff）で、死ぬ前に書き終えている。そのうえで次の世代を排他作成する。先に作った者がいれば失敗するので、1 世代につき勝者は 1 人。
+  - 世代のファイル（記録も `.released` も）は**一切消さない**。一度でも存在した世代の名前は残り続け、その名前への排他作成は必ず EEXIST で失敗する。古い判断を持つ者（空のディレクトリを見た者、とうに上書きされた世代 K を見た者）でも、使われた世代番号を作り直すことはできない。これは構造から保証される。K を奪えるのは、K がまだ最大（誰も K+1 を作っていない）のときだけ。
+    - 古い世代を「床」の印の下で消す案は採らなかった。「床を確かめてから作る」は 2 手で、確かめてから実行するまでの隙間がまた生まれるため。
+    - 代わりに、取得 1 回と enqueue 1 回ごとに、小さなファイル（1 KiB 未満）が 2 つずつ増える。キューを誰も使っていないときに、ディレクトリごと消せば初期化できる。
+  - 解放は、自分の世代の `.released` を作ること（ほかの世代には触れない）。
+  - 読むファイルはすべて fail closed で扱う。記録、`.released`、ticket、`seq.json` は O_NOFOLLOW と O_NONBLOCK で開き、symlink は辿らない。FIFO でも止まらない。開いた descriptor で、本人の所有する通常ファイルであることを確かめ、それ以外は理由を示して拒否する。形の読めない記録も、空きとはみなさず拒否する。
+  - `.released` が有効なのは、通常ファイルで、同じ世代とその保持者の ticketId を書いているときだけ。それ以外（symlink、別の保持者や別の世代を書いたもの、空、ディレクトリ）は `ANOMALY` として報告し、保持中として扱う。偽の印で、生きた所有者が空きに見えることはない。
+  - 古い判断（handOff 直後に launcher を死んだと見た待ち手、死んだ lease を同時に奪おうとする 2 人の割り当て係）でも、所有者の記録は消えず、3 人目も入らない。これを、操作の間に割り込む決まった手順の単体テスト（時間任せではない）で固定している。
 - 資格情報: コマンド行には API キーなどの資格情報が含まれることがある。そのため、コマンド行そのもの（引数）は記録・status 出力・エラー・ログのどこにも出さない。プロセスの識別は、PID、ps の開始時刻、コマンド行全体の SHA-256、argv[0] の basename（安全な文字だけ。それ以外は `unknown`）で行う。`--api-key=FAKE-SECRET-…` を引数に持つ実プロセスで、キューのファイル、status、拒否メッセージ、待ちの表示のどこにも出ないことをテストで固定している。
-- FIFO: seq は短い enqueue ロック（排他作成、保持者の pid と識別情報を記録）の中で割り当てる。`seq.json` が最大値を覚えているので、seq は enqueue の順に厳密に増え、再利用されない。待つ側は、所有者・自分の順番・待ち時間を表示する（所有者が替わったとき、またはその後 60 秒ごと）。
-- 回収の条件: 所有者（待ち行列の ticket、enqueue ロックも同じ）を消してよいのは、`ps -p <pid>` の結果、その PID が無いとき、またはコマンド行の digest か開始時刻が記録と違う（PID の使い回し）ときだけ。所有者の回収は先頭の待ち手だけが行う。消す前に一意な名前へ rename し、中身が判定したものと同じことを確かめる。違えば元に戻す。どのプロセスにも signal を送らない（`kill`/`pkill`/`pgrep`、一覧の pattern 検索は使わない。待ち手自身に一致して待ちが終わらなかった Mappy の事故を防ぐ）。30 分を超えた所有者は報告するだけ（`REPORT:` と `overdue`）。時計が戻ったら、保持時間は unknown と表示し、時間を理由にした判定はしない。
+- FIFO: seq は enqueue の lease（上の世代 lease。保持者の pid と識別情報を記録）の中で割り当てる。`seq.json` が最大値を覚えているので、seq は enqueue の順に厳密に増え、再利用されない。待つ側は、所有者・自分の順番・待ち時間を表示する（所有者が替わったとき、またはその後 60 秒ごと）。
+- 回収の条件: 所有者・enqueue の lease・待ち行列の ticket を回収（lease は次の世代を取る、ticket は消す）してよいのは、`ps -p <pid>` の結果、その PID が無いとき、またはコマンド行の digest か開始時刻が記録と違う（PID の使い回し）ときだけ。所有者の回収は先頭の待ち手だけが行う。ticket の名前は固有で、中身も変わらないので、判定した ticket だけが消える。どのプロセスにも signal を送らない（`kill`/`pkill`/`pgrep`、一覧の pattern 検索は使わない。待ち手自身に一致して待ちが終わらなかった Mappy の事故を防ぐ）。30 分を超えた所有者は報告するだけ（`REPORT:` と `overdue`）。時計が戻ったら、保持時間は unknown と表示し、時間を理由にした判定はしない。
 - 再入: `run` は子に `ORCA_HEAVY_QUEUE_TOKEN` を渡し、同じ token を持つ要求（commit → pre-commit → check など）は待たずに実行する。native を持つ worktree からの check は入れ子として実行する（自分の実機セッション中の commit で deadlock しない）。同じ worktree からのそれ以外の 2 つ目の要求（check の二重実行、待ち中の二重 enqueue、native の二重取得）は、待たずに理由を示して拒否する。
 - 拒否（何も実行しない）: 記録や `seq.json` が読めない・形が違う、tickets に想定外のファイルがある、ディレクトリが symlink・ファイル・他人の所有・共有書き込み可・書き込み不可、ps が判定できない。自動で消して直すことはしない。
 - 既知の限界: Obsidian 自身が再起動して PID が変わる（`app.relaunch()`）と、記録の PID が消えたとみなして native が回収される。その後に `harness:quit` を実行すると、記録外の profile プロセスが一覧で表示される（従来どおり）。

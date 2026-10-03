@@ -7,10 +7,10 @@
 // basename are ever persisted, returned, logged or put into errors. The raw command line stays in memory only.
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { accessSync, appendFileSync, constants, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync,
-  writeFileSync } from 'node:fs';
+import { accessSync, appendFileSync, closeSync, constants, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync,
+  renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, isAbsolute, join, normalize } from 'node:path';
+import { isAbsolute, join, normalize } from 'node:path';
 
 export const jobs = ['check', 'native'];
 export const overdueMs = 30 * 60 * 1000;
@@ -96,10 +96,15 @@ function checkDirectory(path, system, recursive = false) {
 /** Validate (or create, mode 0700) the queue layout. Anything unexpected refuses with the reason. */
 export function openQueue(dir, system = defaultSystem) {
   if (!isAbsolute(dir) || normalize(dir) !== dir) refuse(`Heavy-job queue directory must be a normalized absolute path: ${dir}`);
-  const paths = { dir, tickets: join(dir, 'tickets'), tmp: join(dir, 'tmp'), stale: join(dir, 'stale'), owner: join(dir, 'owner.json'),
-    history: join(dir, 'history.jsonl'), enqueueLock: join(dir, 'enqueue.lock'), seq: join(dir, 'seq.json') };
+  const paths = { dir, tickets: join(dir, 'tickets'), tmp: join(dir, 'tmp'), owner: join(dir, 'owner'), enqueue: join(dir, 'enqueue'),
+    history: join(dir, 'history.jsonl'), seq: join(dir, 'seq.json') };
   checkDirectory(dir, system, true);
-  for (const sub of [paths.tickets, paths.tmp, paths.stale]) checkDirectory(sub, system);
+  for (const legacy of ['owner.json', 'enqueue.lock', 'stale']) {
+    let present = true;
+    try { lstatSync(join(dir, legacy)); } catch (error) { if (error.code !== 'ENOENT') throw error; present = false; }
+    if (present) refuse(`${join(dir, legacy)} is from an earlier queue layout; refusing. Remove it once nothing uses the queue.`);
+  }
+  for (const sub of [paths.tickets, paths.tmp, paths.owner, paths.enqueue]) checkDirectory(sub, system);
   return { dir, paths, system };
 }
 
@@ -118,20 +123,39 @@ function validRecord(record, kind) {
   return kind === 'ticket' || (isText(record.token) && isTime(record.startedAt) && Number.isFinite(record.waitedMs));
 }
 
-/** Parsed record, or null when absent. A record that cannot be judged refuses (never guessed at or deleted). */
-function readRecord(file, kind) {
-  let stat;
-  try { stat = lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-  if (stat.isSymbolicLink() || !stat.isFile()) refuse(`${file} is not a regular file; refusing. Inspect and remove it manually.`);
-  let record;
-  try { record = JSON.parse(readFileSync(file, 'utf8')); }
+/**
+ * Bytes of a file inside the (already validated, 0700) queue directory, or null when absent. Fail closed: it never
+ * follows a symlink (O_NOFOLLOW, so nothing outside the directory is ever read), never blocks on a FIFO (O_NONBLOCK), and
+ * accepts only a regular file owned by the current user (checked on the opened descriptor, so it cannot be swapped).
+ */
+function readQueueFile(file, system) {
+  let fd;
+  try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
   catch (error) {
-    if (error.code === 'ENOENT') return null; // Removed meanwhile.
-    if (error.code) refuse(`Cannot read ${file} (${error.code}); refusing to use the heavy-job queue.`);
-    record = null;
+    if (error.code === 'ENOENT') return null;
+    if (error.code === 'ELOOP') refuse(`${file} is a symbolic link; refusing (not followed). Inspect and remove it manually.`);
+    refuse(`Cannot open ${file} (${error.code}); refusing to use the heavy-job queue. Inspect it manually.`);
   }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) refuse(`${file} is not a regular file; refusing. Inspect and remove it manually.`);
+    if (system.uid !== undefined && stat.uid !== system.uid) refuse(`${file} is owned by uid ${stat.uid}, not ${system.uid}; refusing.`);
+    return readFileSync(fd);
+  } finally { closeSync(fd); }
+}
+
+/** Parse + shape-check a record; anything that cannot be judged refuses with the reason (never treated as free). */
+function parseRecord(bytes, file, kind) {
+  let record;
+  try { record = JSON.parse(bytes.toString('utf8')); } catch { record = null; }
   if (!validRecord(record, kind)) refuse(`Unrecognized heavy-job queue ${kind} record ${file}; refusing. Inspect and remove it manually.`);
   return record;
+}
+
+/** Parsed record, or null when absent. */
+function readRecord(file, kind, system) {
+  const bytes = readQueueFile(file, system);
+  return bytes === null ? null : parseRecord(bytes, file, kind);
 }
 
 const temporary = (queue) => join(queue.paths.tmp, `${randomUUID()}.json`);
@@ -162,7 +186,116 @@ function history(queue, event) {
   } catch (error) { queue.system.log(`[heavy-queue] could not append ${queue.paths.history} (${error.code ?? error.message}).`); }
 }
 
-export const readOwner = (queue) => readRecord(queue.paths.owner, 'owner');
+const genPattern = /^(\d{12})\.(json|released)$/u;
+const genName = (gen, suffix) => `${String(gen).padStart(12, '0')}.${suffix}`;
+
+/**
+ * Generation leases (the slot owner in `owner/`, the enqueue lock in `enqueue/`).
+ *
+ * Why: renaming or unlinking a shared fixed name (owner.json) after judging it stale can hide a NEW live holder that
+ * replaced it between the check and the act, letting a third contender in. Here no live holder's file is ever renamed,
+ * replaced by anyone else, or removed:
+ * - Each holder has its own immutable-name file `<gen>.json`, created only by exclusive create at `gen = highest + 1`.
+ * - The current holder is the highest generation, unless it carries a `<gen>.released` marker or its PID is dead / reused.
+ * - A takeover first proves the inspected generation is unchanged (re-read the bytes after judging the holder dead: only
+ *   a live holder ever rewrites its own file, e.g. handOff, and it does so before it can die), then exclusively creates the
+ *   next generation; a competitor that got there first makes the create fail, so at most one takeover per generation wins.
+ * - Generation files are NEVER deleted (neither records nor markers). So every generation name that has ever existed
+ *   still exists, and the exclusive create (link) of any used name fails with EEXIST: by construction, an actor with a
+ *   stale view (an empty directory, or generation K long since superseded) can never re-create a generation number that
+ *   has existed, and a takeover of K succeeds only while K is still the highest (nobody has created K+1). Pruning old
+ *   generations behind a floor marker was rejected: "check the floor, then create" is two steps, the same check-then-act
+ *   window again. Cost: two small files (< 1 KiB each) per acquisition and per enqueue; reset by deleting the whole queue
+ *   directory while nothing uses it (docs/harness.md).
+ * - Release = create our own `<gen>.released` marker (exact generation; never touches another holder's file).
+ */
+function leaseState(queue, dir, kind) {
+  // One pass with a running maximum: files accumulate forever, so no spread into Math.max (argument limit) and no per-file
+  // map; only the highest generation and whether its record exists matter.
+  let gen = 0; let hasRecord = false;
+  for (const name of readdirSync(dir)) {
+    const match = genPattern.exec(name);
+    if (!match || Number(match[1]) === 0) {
+      refuse(`Unexpected entry ${join(dir, name)} in the heavy-job queue; refusing. Inspect and remove it manually.`);
+    }
+    const number = Number(match[1]);
+    if (number > gen) { gen = number; hasRecord = false; }
+    if (number === gen && match[2] === 'json') hasRecord = true;
+  }
+  if (!gen) return null;
+  const file = join(dir, genName(gen, 'json'));
+  if (!hasRecord) refuse(`${join(dir, genName(gen, 'released'))} has no generation record; refusing. Inspect it manually.`);
+  const bytes = readQueueFile(file, queue.system);
+  if (bytes === null) return { retry: true }; // Defensive only: generation files are never deleted.
+  const record = parseRecord(bytes, file, kind);
+  return { gen, file, bytes, record: { ...record, gen }, released: releasedBy(queue, dir, gen, record) };
+}
+
+/**
+ * True only for a valid release marker of exactly this generation and holder: a regular file (not a symlink, FIFO or
+ * directory) owned by us, naming the same generation and ticketId. Anything else is an anomaly: reported, and the
+ * generation stays held (fail closed: a forged marker can never make a live holder look free).
+ */
+function releasedBy(queue, dir, gen, record) {
+  const marker = join(dir, genName(gen, 'released'));
+  let bytes;
+  try { bytes = readQueueFile(marker, queue.system); }
+  catch (error) {
+    if (!(error instanceof HeavyQueueError)) throw error;
+    reportAnomaly(queue, `${error.message} Treated as NOT released.`);
+    return false;
+  }
+  if (bytes === null) return false;
+  let value;
+  try { value = JSON.parse(bytes.toString('utf8')); } catch { value = null; }
+  if (value?.schema === 2 && value.gen === gen && value.ticketId === record.ticketId) return true;
+  reportAnomaly(queue, `${marker} does not name generation ${gen} and its holder; treated as NOT released. Inspect it manually.`);
+  return false;
+}
+
+function reportAnomaly(queue, message) {
+  queue.anomalies ??= new Set();
+  if (queue.anomalies.has(message)) return;
+  queue.anomalies.add(message);
+  queue.system.log(`[heavy-queue] ANOMALY: ${message}`);
+  history(queue, { event: 'anomaly', message });
+}
+
+/** `{ free, reason }` of an inspected generation: released, or holder PID dead / reused. */
+function leaseFree(state, system) {
+  if (!state) return { free: true };
+  if (state.released) return { free: true, released: true };
+  const live = verify(state.record, system);
+  return live.live ? { free: false } : { free: true, reason: live.reason };
+}
+
+/**
+ * Take the generation after `state` (null = none seen). Returns the new generation, or 0 when it must judge again (the
+ * inspected generation changed, or the next name already exists: someone else won, or our view was stale).
+ */
+function takeLease(queue, dir, state, record) {
+  if (state) {
+    const now = readQueueFile(state.file, queue.system);
+    if (now === null || !now.equals(state.bytes)) return 0; // Rewritten by its (then live) holder after we read it: judge again.
+  }
+  const gen = (state?.gen ?? 0) + 1;
+  const stored = { ...record }; delete stored.gen;
+  return createExclusive(queue, join(dir, genName(gen, 'json')), stored) ? gen : 0; // Never reusable: names are never deleted.
+}
+
+function releaseLease(queue, dir, gen, ticketId) {
+  return createExclusive(queue, join(dir, genName(gen, 'released')),
+    { schema: 2, gen, ticketId, releasedAt: new Date(queue.system.now()).toISOString() });
+}
+
+/** Highest unreleased owner generation (live or not), or null. */
+export function readOwner(queue) {
+  for (;;) {
+    const state = leaseState(queue, queue.paths.owner, 'owner');
+    if (state?.retry) continue;
+    return state && !state.released ? state.record : null;
+  }
+}
 
 export function listTickets(queue) {
   const tickets = [];
@@ -170,7 +303,7 @@ export function listTickets(queue) {
     const file = join(queue.paths.tickets, name);
     const match = ticketPattern.exec(name);
     if (!match) refuse(`Unexpected entry ${file} in the heavy-job queue; refusing. Inspect and remove it manually.`);
-    const record = readRecord(file, 'ticket');
+    const record = readRecord(file, 'ticket', queue.system);
     if (!record) continue; // Removed meanwhile.
     if (record.ticketId !== match[2] || record.seq !== Number(match[1])) refuse(`Ticket ${file} does not match its name; refusing.`);
     tickets.push({ ...record, file });
@@ -195,27 +328,6 @@ export const summary = (record) => ({ ticketId: record.ticketId, project: record
   executable: record.executable, commandDigest: record.commandDigest, started: record.started, job: record.job, seq: record.seq, enqueuedAt: record.enqueuedAt, ...(record.startedAt ? { startedAt: record.startedAt } : {}),
   ...(record.waitedMs !== undefined ? { waitedMs: record.waitedMs } : {}), ...(record.launcher ? { launcher: record.launcher } : {}) });
 
-/**
- * Remove `file` only if it still holds the record judged: rename it to a unique name first, then compare. If a newer
- * record took the name meanwhile, it is restored; if even that fails (a third writer), both are kept and we refuse.
- */
-function removeIfSame(queue, file, record, event) {
-  const moved = join(queue.paths.stale, `${basename(file)}.${randomUUID()}`);
-  try { renameSync(file, moved); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
-  let after;
-  try { after = JSON.parse(readFileSync(moved, 'utf8')); } catch { after = null; }
-  if (after?.ticketId !== record.ticketId || after?.pid !== record.pid) {
-    try { linkSync(moved, file); } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      refuse(`Heavy-job queue race: kept ${moved} because ${file} was recreated meanwhile; inspect both manually.`);
-    }
-    removeQuietly(moved);
-    return false;
-  }
-  removeQuietly(moved);
-  if (event) history(queue, { ...event, record: summary(record) });
-  return true;
-}
 
 export function formatDuration(ms) {
   if (!Number.isFinite(ms) || ms < 0) return 'unknown (clock moved back)';
@@ -287,32 +399,43 @@ export async function acquire(queue, request, options = {}) {
         if (ticket.ticketId === ticketId) break;
         const state = verify(ticket, system);
         if (state.live) ahead.push(ticket);
-        else removeIfSame(queue, ticket.file, ticket, { event: 'recovered-ticket', reason: state.reason });
-      }
-      const owner = readOwner(queue);
-      const ownerState = owner ? verify(owner, system) : null;
-      if (owner && !ownerState.live) {
-        // Only the head of the queue recovers a dead / reused owner, so recovery and acquisition do not race.
-        if (!ahead.length) { removeIfSame(queue, queue.paths.owner, owner, { event: 'recovered-owner', reason: ownerState.reason }); continue; }
-      } else if (!owner && !ahead.length) {
-        const waitedMs = Math.max(0, Math.round(system.monotonic() - begin));
-        const record = { ...base, token: randomUUID(), startedAt: new Date(system.now()).toISOString(), waitedMs };
-        if (createExclusive(queue, queue.paths.owner, record)) {
-          acquired = true;
-          removeQuietly(file);
-          history(queue, { event: 'acquired', record: summary(record) });
-          if (lastShown) system.log(`[heavy-queue] ${job} slot acquired after waiting ${formatDuration(waitedMs)}.`);
-          return { mode: 'acquired', owner: record, waitedMs };
+        else {
+          // Ticket names are unique and their contents never change, so this name can only ever hold the judged ticket.
+          removeQuietly(ticket.file);
+          history(queue, { event: 'recovered-ticket', reason: state.reason, record: summary(ticket) });
         }
-        continue;
       }
+      const lease = leaseState(queue, queue.paths.owner, 'owner');
+      if (lease?.retry) continue;
+      const judged = leaseFree(lease, system);
+      const owner = lease && !lease.released ? lease.record : null;
+      if (judged.free) {
+        // Only the head of the queue takes the slot (also over a dead / reused owner), which keeps FIFO.
+        if (!ahead.length) {
+          await system.race?.('owner-inspected', { gen: lease?.gen ?? 0 });
+          const waitedMs = Math.max(0, Math.round(system.monotonic() - begin));
+          const record = { ...base, token: randomUUID(), startedAt: new Date(system.now()).toISOString(), waitedMs };
+          const gen = takeLease(queue, queue.paths.owner, lease, record);
+          if (gen) {
+            acquired = true;
+            removeQuietly(file);
+            if (judged.reason) history(queue, { event: 'recovered-owner', reason: judged.reason, record: summary(lease.record) });
+            history(queue, { event: 'acquired', record: summary(record) });
+            if (lastShown) system.log(`[heavy-queue] ${job} slot acquired after waiting ${formatDuration(waitedMs)}.`);
+            return { mode: 'acquired', owner: { ...record, gen }, waitedMs };
+          }
+          continue;
+        }
+      }
+      const ownerState = { live: !judged.free };
       const elapsed = system.monotonic() - begin;
-      const key = owner ? owner.ticketId : `ticket:${ahead[0].ticketId}`;
+      const shownOwner = ownerState.live ? owner : null;
+      const key = shownOwner ? shownOwner.ticketId : `ticket:${ahead[0].ticketId}`;
       if (key !== lastShown || elapsed - lastReport >= reportEveryMs) {
         lastShown = key; lastReport = elapsed;
         const next = ahead[0];
         system.log(`[heavy-queue] waiting for the ${job} slot (#${ahead.length + 1} in line, waited ${formatDuration(elapsed)}); `
-          + (owner ? `owner: ${describe(owner, system)}` : `next: project=${next.project} job=${next.job} pid=${next.pid} worktree=${next.worktree}`));
+          + (shownOwner ? `owner: ${describe(shownOwner, system)}` : `next: project=${next.project} job=${next.job} pid=${next.pid} worktree=${next.worktree}`));
       }
       if (owner && ownerState.live && heldMs(owner, system) > overdueMs && !overdue.has(owner.ticketId)) {
         overdue.add(owner.ticketId);
@@ -328,10 +451,10 @@ export async function acquire(queue, request, options = {}) {
 }
 
 function readLastSeq(queue) {
-  let raw;
-  try { raw = readFileSync(queue.paths.seq, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return 0; throw error; }
+  const raw = readQueueFile(queue.paths.seq, queue.system);
+  if (raw === null) return 0;
   let value;
-  try { value = JSON.parse(raw); } catch { value = null; }
+  try { value = JSON.parse(raw.toString('utf8')); } catch { value = null; }
   if (value?.schema !== 1 || !Number.isSafeInteger(value.seq) || value.seq < 0) {
     refuse(`Unrecognized heavy-job queue counter ${queue.paths.seq}; refusing. Inspect and remove it manually.`);
   }
@@ -339,27 +462,33 @@ function readLastSeq(queue) {
 }
 
 /**
- * Append a ticket under a short exclusive enqueue lock (holding our pid / command-line digest), so sequence numbers are
- * unique and strictly increasing in enqueue order. The high-water mark in seq.json keeps numbers from being reused
- * after tickets leave. A lock left by a dead (or reused) PID is recovered like a stale owner; a live one is waited for.
+ * Append a ticket under the enqueue lease (a generation lease holding our pid / command-line digest), so sequence
+ * numbers are unique and strictly increasing in enqueue order. The high-water mark in seq.json keeps numbers from being
+ * reused after tickets leave. A lease left by a dead (or reused) PID is taken over; a live one is waited for.
  */
 async function enqueue(queue, base) {
   const { system } = queue;
-  for (let attempt = 0; !createExclusive(queue, queue.paths.enqueueLock, base); attempt += 1) {
-    const holder = readRecord(queue.paths.enqueueLock, 'lock');
-    const state = holder ? verify(holder, system) : { live: true };
-    if (!state.live) removeIfSame(queue, queue.paths.enqueueLock, holder, { event: 'recovered-enqueue-lock', reason: state.reason });
-    else if (attempt >= 6000) refuse(`The enqueue lock ${queue.paths.enqueueLock} stays held by live pid ${holder?.pid}; refusing.`);
+  let gen = 0;
+  for (let attempt = 0; !gen; attempt += 1) {
+    const lease = leaseState(queue, queue.paths.enqueue, 'lock');
+    if (lease?.retry) continue;
+    const judged = leaseFree(lease, system);
+    if (judged.free) {
+      await system.race?.('enqueue-inspected', { gen: lease?.gen ?? 0 });
+      gen = takeLease(queue, queue.paths.enqueue, lease, base);
+      if (gen && judged.reason) history(queue, { event: 'recovered-enqueue-lock', reason: judged.reason, record: summary(lease.record) });
+    } else if (attempt >= 6000) refuse(`The enqueue lease in ${queue.paths.enqueue} stays held by live pid ${lease.record.pid}; refusing.`);
     else await system.sleep(10);
   }
   try {
+    await system.race?.('enqueue-held', { gen });
     const seq = Math.max(readLastSeq(queue), listTickets(queue).at(-1)?.seq ?? 0) + 1;
     replaceAtomic(queue, queue.paths.seq, { schema: 1, seq });
     const file = join(queue.paths.tickets, `${String(seq).padStart(12, '0')}-${base.ticketId}.json`);
     if (!createExclusive(queue, file, { ...base, seq })) refuse(`Ticket ${file} already exists; refusing.`);
     return { seq, file };
   } finally {
-    removeIfSame(queue, queue.paths.enqueueLock, base, null);
+    releaseLease(queue, queue.paths.enqueue, gen, base.ticketId);
   }
 }
 
@@ -367,7 +496,9 @@ async function enqueue(queue, base) {
 export function release(queue, ticketId, reason = 'released') {
   const owner = readOwner(queue);
   if (!owner || owner.ticketId !== ticketId) return false;
-  return removeIfSame(queue, queue.paths.owner, owner, { event: reason, heldMs: heldMs(owner, queue.system) });
+  if (!releaseLease(queue, queue.paths.owner, owner.gen, ticketId)) return false;
+  history(queue, { event: reason, heldMs: heldMs(owner, queue.system), record: summary(owner) });
+  return true;
 }
 
 /** Tie the held slot to a long-lived process (e.g. a dedicated Obsidian) that outlives the acquiring CLI. */
@@ -376,11 +507,14 @@ export function handOff(queue, ticketId, pid) {
   if (!owner || owner.ticketId !== ticketId) refuse(`The slot ${ticketId} is no longer held; cannot hand it to pid ${pid}.`);
   const info = queue.system.processInfo(pid);
   if (!info) refuse(`Cannot hand the slot to pid ${pid}: it does not exist.`);
-  const record = { ...owner, pid, ...identify(info),
+  const { gen, ...stored } = owner;
+  const record = { ...stored, pid, ...identify(info),
     launcher: { pid: owner.pid, executable: owner.executable, commandDigest: owner.commandDigest, started: owner.started } };
-  replaceAtomic(queue, queue.paths.owner, record);
+  // Only the live holder rewrites its own generation file (atomic rename). Takeovers re-read these bytes after judging the
+  // holder dead, so a stale view of the launcher record can never take the slot from the handed-off process.
+  replaceAtomic(queue, join(queue.paths.owner, genName(gen, 'json')), record);
   history(queue, { event: 'handed-off', record: summary(record) });
-  return record;
+  return { ...record, gen };
 }
 
 /** Read-only snapshot (never recovers anything): owner liveness, hold time, overdue flag, waiters in order. */

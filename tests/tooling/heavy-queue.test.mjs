@@ -5,18 +5,28 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
-import { acquire, defaultQueueDir, defaultSystem, formatDuration, HeavyQueueError, identify, listTickets, openQueue, overdueMs, readOwner, release,
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { acquire, defaultQueueDir, defaultSystem, formatDuration, handOff, HeavyQueueError, identify, listTickets, openQueue, overdueMs, readOwner, release,
   run, status, tokenVariable } from '../../scripts/heavy-queue/heavy-queue.mjs';
 import { assertNativeHeld, heavyQueueEnabled, launchWithQueue, quitWithQueue } from '../../scripts/lib/heavy-queue.mjs';
 import { prepareVault } from '../../scripts/lib/harness.mjs';
 import { cleanup, createFixture } from '../helpers/fixture.mjs';
+
+// Observes every rename / link / unlink made through node:fs (passthrough otherwise), so a concurrency test can check an
+// invariant at the exact instant between two filesystem steps of the code under test, without relying on timing.
+const fsObserver = { after: null };
+vi.mock('node:fs', async (importOriginal) => {
+  const real = await importOriginal();
+  const watched = (name) => (...args) => { const result = real[name](...args); fsObserver.after?.(name, args); return result; };
+  return { ...real, default: real, renameSync: watched('renameSync'), linkSync: watched('linkSync'), unlinkSync: watched('unlinkSync') };
+});
 
 const project = fileURLToPath(new URL('../../', import.meta.url));
 const library = join(project, 'scripts', 'heavy-queue', 'heavy-queue.mjs');
 const cli = join(project, 'scripts', 'heavy-queue', 'cli.mjs');
 const temporary = []; const fixtures = [];
 afterEach(() => {
+  fsObserver.after = null;
   while (fixtures.length) cleanup(fixtures.pop());
   while (temporary.length) { const dir = temporary.pop(); chmodSync(dir, 0o700); rmSync(dir, { recursive: true, force: true }); }
 });
@@ -53,6 +63,30 @@ async function waitUntil(predicate, what, limitMs = 45000) {
 // Tests that start real Node processes: generous limits so CPU load from other jobs slows them but does not fail them.
 const realProcessTimeout = 120000;
 const request = (worktree, job = 'check', env = {}) => ({ project: 'kioku', worktree, job, env });
+/** Highest generation file of a lease directory (`owner` or `enqueue`) and whether it is still held (no release marker). */
+function leaseTop(dir, lease = 'owner') {
+  const names = existsSync(join(dir, lease)) ? readdirSync(join(dir, lease)) : [];
+  const top = names.filter((name) => name.endsWith('.json')).sort().at(-1);
+  return top ? { name: top, file: join(dir, lease, top), held: !names.includes(top.replace(/\.json$/u, '.released')) } : null;
+}
+const ownerHeld = (dir) => Boolean(leaseTop(dir)?.held);
+/** A lease / ticket-shaped record for `pid` (identity of the fake command `node requester-<pid>`). */
+const leaseRecord = (pid) => JSON.stringify({ schema: 2, ticketId: '00000000-0000-4000-8000-000000000000', project: 'kioku',
+  worktree: `/w/holder-${pid}`, pid, ...identify({ command: `node requester-${pid}`, started: 'Sat Oct  3 00:00:00 2026' }), job: 'check',
+  enqueuedAt: '2026-10-03T00:00:00.000Z' });
+const markerFor = (gen, ticketId) => JSON.stringify({ schema: 2, gen, ticketId, releasedAt: '2026-10-03T00:00:00.000Z' });
+/** A valid release marker of generation `gen` for the holder written by `leaseRecord`. */
+const releaseMarker = (gen) => markerFor(gen, '00000000-0000-4000-8000-000000000000');
+/** Pause `proc` once at race stage `wanted` (the code under test awaits `system.race(stage)` between inspect and act). */
+function pauseAt(proc, wanted) {
+  let resume = null; let reached = false;
+  proc.race = (stage) => {
+    if (stage !== wanted || resume) return undefined;
+    reached = true;
+    return new Promise((go) => { resume = go; });
+  };
+  return { reached: () => reached, resume: () => resume() };
+}
 const historyEvents = (dir) => readFileSync(join(dir, 'history.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line).event);
 
 describe('FIFO order', () => {
@@ -112,7 +146,7 @@ describe('FIFO order', () => {
     expect(a.code, a.stderr).toBe(0); expect(b.code, b.stderr).toBe(0);
     expect(readFileSync(log, 'utf8')).toBe('start A\nend A\nstart B\nend B\n');
     expect(b.stderr).toMatch(/waiting for the check slot .*owner: project=pilot job=check pid=\d+/u);
-    expect(readdirSync(join(dir, 'tickets'))).toEqual([]); expect(existsSync(join(dir, 'owner.json'))).toBe(false);
+    expect(readdirSync(join(dir, 'tickets'))).toEqual([]); expect(ownerHeld(dir)).toBe(false);
   }, realProcessTimeout);
 
   it('simultaneous enqueues behind a barrier get distinct sequence numbers and are served in that order (many rounds)', async () => {
@@ -236,7 +270,8 @@ describe('stale owners and tickets', () => {
     const recovered = readFileSync(join(dir, 'history.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line))
       .find((event) => event.event === 'recovered-owner');
     expect(recovered).toMatchObject({ reason: 'pid 201 has exited', record: { pid: 201, worktree: '/w/crashed' } });
-    expect(readdirSync(join(dir, 'stale'))).toEqual([]);
+    // Generation files are never deleted (a used generation number can never be re-created).
+    expect(readdirSync(join(dir, 'owner')).filter((name) => name.endsWith('.json')).sort()).toEqual(['000000000001.json', '000000000002.json']);
   });
 
   it('detects PID reuse by a different command line or start time and recovers', async () => {
@@ -253,36 +288,34 @@ describe('stale owners and tickets', () => {
 
   it('recovers an enqueue lock left by a dead PID but waits for a live one', async () => {
     const host = fakeHost(); const dir = scratch();
-    const lockRecord = (pid) => JSON.stringify({ schema: 2, ticketId: '00000000-0000-4000-8000-000000000000', project: 'kioku',
-      worktree: '/w/crashed', pid, ...identify({ command: `node requester-${pid}`, started: 'Sat Oct  3 00:00:00 2026' }), job: 'check',
-      enqueuedAt: '2026-10-03T00:00:00.000Z' });
     openQueue(dir, host.proc(251));
-    writeFileSync(join(dir, 'enqueue.lock'), lockRecord(250)); // pid 250 is not in the table: dead.
+    writeFileSync(join(dir, 'enqueue', '000000000001.json'), leaseRecord(250)); // pid 250 is not in the table: dead.
     const first = await acquire(openQueue(dir, host.proc(251)), request('/w/a'));
     expect(first.mode).toBe('acquired');
     expect(historyEvents(dir)).toContain('recovered-enqueue-lock');
-    host.proc(252); writeFileSync(join(dir, 'enqueue.lock'), lockRecord(252)); // Live holder.
+    expect(leaseTop(dir, 'enqueue')).toMatchObject({ name: '000000000002.json', held: false });
+    host.proc(252); writeFileSync(join(dir, 'enqueue', '000000000003.json'), leaseRecord(252)); // Live holder of the next generation.
     const observer = openQueue(dir, host.proc(254));
     const waiting = acquire(openQueue(dir, host.proc(253)), request('/w/b'));
     await settle(() => host.queried.filter((pid) => pid === 252).length > 5);
-    expect(listTickets(observer)).toEqual([]); expect(existsSync(join(dir, 'enqueue.lock'))).toBe(true);
-    rmSync(join(dir, 'enqueue.lock'));
+    expect(listTickets(observer)).toEqual([]); expect(leaseTop(dir, 'enqueue')).toMatchObject({ name: '000000000003.json', held: true });
+    writeFileSync(join(dir, 'enqueue', '000000000003.released'), releaseMarker(3)); // That holder releases.
     await settle(() => listTickets(observer).length === 1);
     release(observer, first.owner.ticketId);
     expect((await waiting).owner.pid).toBe(253);
   });
 
-  it('never touches a live owner: owner.json bytes stay identical while waiting, and no process is signalled', async () => {
+  it('never touches a live owner: its generation file bytes stay identical while waiting, and no process is signalled', async () => {
     const host = fakeHost(); const dir = scratch();
     const owner = openQueue(dir, host.proc(401));
     const held = await acquire(owner, request('/w/owner'));
-    const before = readFileSync(join(dir, 'owner.json'));
+    const before = readFileSync(leaseTop(dir).file);
     let done = false;
     const waiting = acquire(openQueue(dir, host.proc(402)), request('/w/waiter')).then((result) => { done = true; return result; });
     host.clock.wall += 5000;
     await settle(() => host.queried.filter((pid) => pid === 401).length > 20);
     expect(done).toBe(false);
-    expect(readFileSync(join(dir, 'owner.json'))).toEqual(before);
+    expect(readFileSync(leaseTop(dir).file)).toEqual(before);
     release(owner, held.owner.ticketId);
     await waiting;
     // Only exact-PID lookups were ever made (the fake has no kill, list-all or pattern API at all).
@@ -300,6 +333,211 @@ describe('stale owners and tickets', () => {
     release(owner, held.owner.ticketId);
     expect((await nextWait).owner.pid).toBe(503);
     expect(await deadWait).toBeInstanceOf(HeavyQueueError); // Its ticket vanished: it refuses instead of running unqueued.
+  });
+});
+
+describe('stale views never hide a live holder (deterministic interleavings, no timing)', () => {
+  it('owner: a head waiter that judged the launcher dead after it handed the slot off never hides or replaces the new holder', async () => {
+    const host = fakeHost(); const dir = scratch();
+    const launcher = openQueue(dir, host.proc(1701, 'node scripts/obsidian-instance-cli.mjs launch'));
+    const held = await acquire(launcher, request('/w/kioku', 'native'));
+    const watcher = openQueue(dir, host.proc(1799));
+    const waiterSystem = host.proc(1702);
+    let waiterDone = false;
+    const waiter = acquire(openQueue(dir, waiterSystem), request('/w/a')).then((result) => { waiterDone = true; return result; });
+    await settle(() => host.logs.length >= 1); // The waiter is the head of the queue and has seen the live launcher.
+    const violations = [];
+    let triggered = false;
+    const realInfo = waiterSystem.processInfo;
+    // Between the waiter reading the owner record and acting on it: the launcher hands the slot to the dedicated instance
+    // (pid 4250) and exits. The waiter's view is now stale. From here on, after EVERY rename / link / unlink, the owner record
+    // must still exist and belong to pid 4250.
+    waiterSystem.processInfo = (pid) => {
+      if (pid === 1701 && !triggered) {
+        triggered = true;
+        host.table.set(4250, { command: 'Obsidian --user-data-dir=/w/kioku/.tooling/obsidian-profile', started: 'o' });
+        handOff(launcher, held.owner.ticketId, 4250);
+        host.table.delete(1701);
+        fsObserver.after = (operation, args) => {
+          const owner = readOwner(watcher);
+          if (owner?.pid !== 4250) violations.push(`${operation} ${args.map(String).join(' -> ')}: owner ${owner ? `pid ${owner.pid}` : 'absent'}`);
+        };
+      }
+      return realInfo(pid);
+    };
+    await settle(() => triggered);
+    let thirdDone = false;
+    const third = acquire(openQueue(dir, host.proc(1703)), request('/w/third')).then((result) => { thirdDone = true; return result; });
+    await settle(() => host.queried.filter((pid) => pid === 4250).length > 20);
+    expect(violations).toEqual([]);
+    expect(readOwner(watcher)).toMatchObject({ pid: 4250, ticketId: held.owner.ticketId, job: 'native' });
+    expect(waiterDone).toBe(false); expect(thirdDone).toBe(false);
+    expect(historyEvents(dir)).not.toContain('recovered-owner');
+    fsObserver.after = null;
+    host.table.delete(4250); // The dedicated instance exits: now (and only now) the head waiter takes the slot, FIFO.
+    const next = await waiter;
+    expect(thirdDone).toBe(false);
+    release(watcher, next.owner.ticketId);
+    expect((await third).owner.pid).toBe(1703);
+  });
+
+  it('owner: a head that saw an empty owner/ and stalled can never re-create generation 1 after it was used', async () => {
+    // FIFO alone already keeps others behind a live head. To test the lease by itself, the later requesters are made to
+    // misjudge the stalled head's ticket as dead (they prune it) so they can take the slot while it is stalled.
+    const host = fakeHost(); const dir = scratch(); const watcher = openQueue(dir, host.proc(2099));
+    const stalled = host.proc(2001); const stall = pauseAt(stalled, 'owner-inspected');
+    const blind = (proc) => { const real = proc.processInfo; proc.processInfo = (pid) => (pid === 2001 ? null : real(pid)); return proc; };
+    const stalledWait = acquire(openQueue(dir, stalled), request('/w/stalled')).then((result) => ({ result }), (error) => ({ error }));
+    await settle(() => stall.reached()); // It saw owner/ empty and stopped right before creating generation 1.
+    expect(readdirSync(join(dir, 'owner'))).toEqual([]);
+    const first = await acquire(openQueue(dir, blind(host.proc(2002))), request('/w/first'));
+    expect(first.owner.gen).toBe(1);
+    release(watcher, first.owner.ticketId);
+    const second = await acquire(openQueue(dir, blind(host.proc(2003))), request('/w/second'));
+    expect(second.owner.gen).toBe(2); // Live holder from here on.
+    const violations = [];
+    fsObserver.after = (operation) => {
+      const owner = readOwner(watcher);
+      if (owner?.pid !== 2003) violations.push(`${operation}: owner ${owner ? `pid ${owner.pid}` : 'absent'}`);
+    };
+    stall.resume();
+    const outcome = await stalledWait;
+    fsObserver.after = null;
+    expect(outcome.result, 'the stalled head must not become a second owner').toBeUndefined();
+    expect(outcome.error?.message).toMatch(/ticket .* vanished/u); // It judged again and found its (pruned) ticket gone.
+    expect(violations).toEqual([]);
+    expect(readOwner(watcher)).toMatchObject({ pid: 2003, gen: 2 });
+    expect(readdirSync(join(dir, 'owner')).filter((name) => name.endsWith('.json')).sort()).toEqual(['000000000001.json', '000000000002.json']);
+    release(watcher, second.owner.ticketId);
+  });
+
+  it('enqueue lease: an allocator that saw an empty enqueue/ and stalled never allocates beside the live holder', async () => {
+    const host = fakeHost(); const dir = scratch(); const watcher = openQueue(dir, host.proc(2199));
+    const stalled = host.proc(2101);
+    let stallResume = null; let stallReached = false; let holderInside = false; const overlaps = [];
+    stalled.race = (stage) => {
+      if (stage === 'enqueue-inspected' && !stallReached) { stallReached = true; return new Promise((go) => { stallResume = go; }); }
+      if (stage === 'enqueue-held' && holderInside) overlaps.push('the stalled allocator entered the enqueue section while the holder was inside');
+      return undefined;
+    };
+    const stalledWait = acquire(openQueue(dir, stalled), request('/w/stalled'));
+    await settle(() => stallReached); // It saw enqueue/ empty and stopped right before creating generation 1.
+    expect(readdirSync(join(dir, 'enqueue'))).toEqual([]);
+    const first = await acquire(openQueue(dir, host.proc(2102)), request('/w/first')); // Takes enqueue generation 1, releases it.
+    expect(first.owner.seq).toBe(1);
+    const holder = host.proc(2103); const hold = pauseAt(holder, 'enqueue-held');
+    const holderWait = acquire(openQueue(dir, holder), request('/w/holder'));
+    await settle(() => hold.reached()); // Holds enqueue generation 2 while allocating.
+    holderInside = true;
+    stallResume();
+    await settle(() => host.queried.filter((pid) => pid === 2103).length > 5); // The stalled allocator now waits for the holder.
+    expect(overlaps).toEqual([]);
+    expect(leaseTop(dir, 'enqueue')).toMatchObject({ name: '000000000002.json', held: true });
+    holderInside = false;
+    hold.resume();
+    release(watcher, first.owner.ticketId);
+    const holderHeld = await holderWait;
+    release(watcher, holderHeld.owner.ticketId);
+    const stalledHeld = await stalledWait;
+    expect([first.owner.seq, holderHeld.owner.seq, stalledHeld.owner.seq]).toEqual([1, 2, 3]);
+    expect(overlaps).toEqual([]);
+    release(watcher, stalledHeld.owner.ticketId);
+  });
+
+  it('enqueue lease: two allocators taking over a dead lease never allocate side by side or hide the winner', async () => {
+    const host = fakeHost(); const dir = scratch();
+    openQueue(dir, host.proc(1801));
+    writeFileSync(join(dir, 'enqueue', '000000000001.json'), leaseRecord(1800)); // Left by a dead allocator (pid 1800).
+    const watcher = openQueue(dir, host.proc(1899));
+    const first = host.proc(1802); const firstPause = pauseAt(first, 'enqueue-inspected');
+    const firstWait = acquire(openQueue(dir, first), request('/w/first'));
+    await settle(() => firstPause.reached()); // First judged generation 1 dead and stopped right before acting.
+    const second = host.proc(1803); const secondPause = pauseAt(second, 'enqueue-held');
+    const secondWait = acquire(openQueue(dir, second), request('/w/second'));
+    await settle(() => secondPause.reached()); // Second took generation 2 and holds it while allocating.
+    const violations = [];
+    fsObserver.after = (operation) => {
+      const top = leaseTop(dir, 'enqueue');
+      if (top?.name !== '000000000002.json' || !top.held) violations.push(`${operation}: enqueue lease ${top ? `${top.name} held=${top.held}` : 'absent'}`);
+    };
+    firstPause.resume(); // First now acts on its stale view of generation 1.
+    await settle(() => host.queried.filter((pid) => pid === 1803).length > 5); // It found generation 2 live and waits.
+    expect(violations).toEqual([]);
+    expect(listTickets(watcher)).toEqual([]);
+    fsObserver.after = null;
+    secondPause.resume();
+    const secondHeld = await secondWait;
+    expect(secondHeld.owner).toMatchObject({ pid: 1803, seq: 1 });
+    await settle(() => listTickets(watcher).length === 1);
+    expect(listTickets(watcher)[0]).toMatchObject({ pid: 1802, seq: 2 });
+    release(watcher, secondHeld.owner.ticketId);
+    expect((await firstWait).owner).toMatchObject({ pid: 1802, seq: 2 });
+    expect(historyEvents(dir).filter((event) => event === 'recovered-enqueue-lock')).toHaveLength(1);
+  });
+});
+
+describe('fail closed on queue files that are not what they claim', () => {
+  it('a symlinked generation record pointing outside the directory is refused, never followed', async () => {
+    const host = fakeHost(); const dir = scratch(); const outside = scratch();
+    // Outside the queue: a well-formed record of a LIVE pid. If it were followed, the waiter would treat it as the owner.
+    host.proc(1901); writeFileSync(join(outside, 'owner.json'), leaseRecord(1901).replace('"schema":2', '"schema":2,"seq":1,"token":"t",'
+      + '"startedAt":"2026-10-03T00:00:00.000Z","waitedMs":0'));
+    openQueue(dir, host.proc(1902));
+    symlinkSync(join(outside, 'owner.json'), join(dir, 'owner', '000000000001.json'));
+    await expect(acquire(openQueue(dir, host.proc(1902)), request('/w/a'))).rejects.toThrow(/is a symbolic link; refusing \(not followed\)/u);
+    expect(() => readOwner(openQueue(dir, host.proc(1903)))).toThrow(/symbolic link/u);
+    expect(() => status(openQueue(dir, host.proc(1903)))).toThrow(/symbolic link/u);
+    expect(host.queried).not.toContain(1901); // The outside record was never used to judge anything.
+    symlinkSync(join(outside, 'owner.json'), join(dir, 'enqueue', '000000000001.json'));
+    rmSync(join(dir, 'owner', '000000000001.json'));
+    await expect(acquire(openQueue(dir, host.proc(1904)), request('/w/b'))).rejects.toThrow(/symbolic link/u);
+  });
+
+  it('non-regular files (directory, FIFO) as records, tickets or the counter are refused', async () => {
+    const host = fakeHost();
+    const asDirectory = scratch(); openQueue(asDirectory, host.proc(1911)); mkdirSync(join(asDirectory, 'owner', '000000000001.json'));
+    await expect(acquire(openQueue(asDirectory, host.proc(1911)), request('/w/a'))).rejects.toThrow(/is not a regular file/u);
+    const asFifo = scratch(); openQueue(asFifo, host.proc(1912));
+    expect(spawnSync('/usr/bin/mkfifo', [join(asFifo, 'owner', '000000000001.json')]).status).toBe(0);
+    await expect(acquire(openQueue(asFifo, host.proc(1912)), request('/w/a'))).rejects.toThrow(/is not a regular file/u); // Never blocks.
+    const ticket = scratch(); openQueue(ticket, host.proc(1913));
+    symlinkSync(join(scratch(), 'x.json'), join(ticket, 'tickets', `000000000001-${'0'.repeat(8)}-0000-4000-8000-${'0'.repeat(12)}.json`));
+    await expect(acquire(openQueue(ticket, host.proc(1913)), request('/w/a'))).rejects.toThrow(/symbolic link/u);
+    const counter = scratch(); openQueue(counter, host.proc(1914));
+    expect(spawnSync('/usr/bin/mkfifo', [join(counter, 'seq.json')]).status).toBe(0);
+    await expect(acquire(openQueue(counter, host.proc(1914)), request('/w/a'))).rejects.toThrow(/is not a regular file/u);
+  });
+
+  it('a symlinked, wrong-content or non-regular release marker never makes a live owner look free', async () => {
+    const host = fakeHost(); const dir = scratch(); const outside = scratch();
+    const owner = openQueue(dir, host.proc(1921));
+    const forgeries = [
+      ['symlink to a valid-looking marker', (marker, gen, ticketId) => {
+        writeFileSync(join(outside, `marker-${gen}`), markerFor(gen, ticketId)); symlinkSync(join(outside, `marker-${gen}`), marker);
+      }],
+      ['marker naming another holder', (marker, gen) => writeFileSync(marker, markerFor(gen, '11111111-1111-4111-8111-111111111111'))],
+      ['marker naming another generation', (marker, gen, ticketId) => writeFileSync(marker, markerFor(gen + 1, ticketId))],
+      ['empty marker', (marker) => writeFileSync(marker, '')],
+      ['directory as a marker', (marker) => mkdirSync(marker)],
+    ];
+    for (const [label, forge] of forgeries) {
+      const held = await acquire(owner, request('/w/owner'));
+      const marker = join(dir, 'owner', `${String(held.owner.gen).padStart(12, '0')}.released`);
+      forge(marker, held.owner.gen, held.owner.ticketId);
+      host.queried.length = 0; host.logs.length = 0;
+      const viewer = openQueue(dir, host.proc(1922));
+      expect(readOwner(viewer), label).toMatchObject({ pid: 1921, ticketId: held.owner.ticketId });
+      expect(status(viewer).owner, label).toMatchObject({ pid: 1921, live: true });
+      let done = false;
+      const waiting = acquire(openQueue(dir, host.proc(1923)), request('/w/waiter')).then((result) => { done = true; return result; });
+      await settle(() => host.queried.filter((pid) => pid === 1921).length > 10);
+      expect(done, label).toBe(false);
+      expect(host.logs.some((line) => line.includes('ANOMALY') && line.includes('NOT released')), label).toBe(true);
+      // Clean up this round: remove the forgery, the owner releases properly, the waiter takes over and releases.
+      rmSync(marker, { recursive: true, force: true });
+      expect(release(owner, held.owner.ticketId), label).toBe(true);
+      release(owner, (await waiting).owner.ticketId);
+    }
   });
 });
 
@@ -353,7 +591,7 @@ describe('over 30 minutes and clock changes: report only', () => {
   it('reports an overdue live owner once and keeps waiting without touching it', async () => {
     const host = fakeHost(); const dir = scratch();
     const owner = openQueue(dir, host.proc(1001)); const held = await acquire(owner, request('/w/owner'));
-    const before = readFileSync(join(dir, 'owner.json'));
+    const before = readFileSync(leaseTop(dir).file);
     const waiting = acquire(openQueue(dir, host.proc(1002)), request('/w/waiter'));
     await settle(() => host.logs.length === 1);
     host.clock.wall += overdueMs + 60000;
@@ -362,7 +600,7 @@ describe('over 30 minutes and clock changes: report only', () => {
     await settle(() => host.queried.length > seen + 40);
     expect(host.logs.filter((line) => line.includes('REPORT'))).toHaveLength(1);
     expect(host.logs.find((line) => line.includes('REPORT'))).toMatch(/held the slot over 30m00s .*Report only: nothing is signalled/u);
-    expect(readFileSync(join(dir, 'owner.json'))).toEqual(before);
+    expect(readFileSync(leaseTop(dir).file)).toEqual(before);
     expect(status(owner).owner).toMatchObject({ live: true, overdue: true });
     release(owner, held.owner.ticketId);
     expect((await waiting).mode).toBe('acquired');
@@ -387,13 +625,20 @@ describe('over 30 minutes and clock changes: report only', () => {
 describe('unusable queue directory: refuse with the reason', () => {
   it('refuses a corrupt record, an unexpected entry, a file, a symlink, a shared or an unwritable directory', async () => {
     const host = fakeHost(); const me = () => host.proc(1201);
-    const corrupt = scratch(); openQueue(corrupt, me()); writeFileSync(join(corrupt, 'owner.json'), '{not json');
+    const corrupt = scratch(); openQueue(corrupt, me()); writeFileSync(join(corrupt, 'owner', '000000000001.json'), '{not json');
     await expect(acquire(openQueue(corrupt, me()), request('/w/a'))).rejects.toThrow(/Unrecognized heavy-job queue owner record/u);
-    expect(readFileSync(join(corrupt, 'owner.json'), 'utf8')).toBe('{not json'); // Never deleted on a guess.
+    expect(readFileSync(join(corrupt, 'owner', '000000000001.json'), 'utf8')).toBe('{not json'); // Never deleted on a guess.
+    writeFileSync(join(corrupt, 'owner', 'note.txt'), 'x');
+    expect(() => readOwner(openQueue(corrupt, me()))).toThrow(/Unexpected entry/u);
+    const zero = scratch(); openQueue(zero, me()); writeFileSync(join(zero, 'enqueue', '000000000000.json'), leaseRecord(1201));
+    await expect(acquire(openQueue(zero, me()), request('/w/a'))).rejects.toThrow(/Unexpected entry .*000000000000\.json/u); // Generations start at 1.
+
+    const legacy = scratch(); writeFileSync(join(legacy, 'owner.json'), '{}');
+    expect(() => openQueue(legacy, me())).toThrow(/earlier queue layout/u);
 
     const counter = scratch(); openQueue(counter, me()); writeFileSync(join(counter, 'seq.json'), '{"schema":1,"seq":-4}');
     await expect(acquire(openQueue(counter, me()), request('/w/a'))).rejects.toThrow(/Unrecognized heavy-job queue counter/u);
-    expect(existsSync(join(counter, 'enqueue.lock'))).toBe(false);
+    expect(leaseTop(counter, 'enqueue')?.held).toBe(false); // The enqueue lease was released despite the refusal.
 
     const stray = scratch(); openQueue(stray, me()); writeFileSync(join(stray, 'tickets', 'note.txt'), 'x');
     await expect(acquire(openQueue(stray, me()), request('/w/a'))).rejects.toThrow(/Unexpected entry/u);
@@ -493,7 +738,7 @@ describe('Kioku wiring (opt-in)', () => {
     const { result, queueDir, recorded } = checkEntry({ KIOKU_HEAVY_QUEUE: '1' });
     expect(result.status, result.stderr).toBe(3);
     expect(recorded.argv).toEqual(['run', 'check:steps']); expect(recorded.token).toMatch(/^[0-9a-f-]{36}$/u);
-    expect(existsSync(join(queueDir, 'owner.json'))).toBe(false);
+    expect(ownerHeld(queueDir)).toBe(false);
     expect(historyEvents(queueDir)).toEqual(['acquired', 'released']);
   }, realProcessTimeout);
 
@@ -516,7 +761,7 @@ describe('Kioku wiring (opt-in)', () => {
             env: cleanEnv({ npm_execpath: fakeNpm(body), ORCA_HEAVY_QUEUE_DIR: queueDir, ...(queued ? { KIOKU_HEAVY_QUEUE: '1' } : {}) }) });
           expect(result.status, `${queued ? 'queued' : 'opt-out'} ${label}: ${result.stderr}`).toBe(expected);
           if (queued) {
-            expect(existsSync(join(queueDir, 'owner.json'))).toBe(false);
+            expect(ownerHeld(queueDir)).toBe(false);
             expect(historyEvents(queueDir)).toEqual(['acquired', 'released']);
           } else expect(existsSync(queueDir)).toBe(false);
         }
@@ -533,7 +778,7 @@ describe('Kioku wiring (opt-in)', () => {
       expect(missing.status).toBe(1); expect(missing.stderr).toMatch(/could not start/u);
       const usage = spawnSync(process.execPath, [cli, 'run', '--job', 'check'], { cwd: scratch(), encoding: 'utf8', env });
       expect(usage.status).toBe(1); expect(usage.stderr).toMatch(/Heavy-job queue refused: Usage/u);
-      expect(existsSync(join(dir, 'owner.json'))).toBe(false);
+      expect(ownerHeld(dir)).toBe(false);
     }, realProcessTimeout);
 
     it('git commit → .githooks/pre-commit → npm run check → check:steps: a failing step blocks the commit', () => {
