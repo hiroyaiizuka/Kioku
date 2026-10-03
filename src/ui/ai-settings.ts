@@ -205,7 +205,10 @@ export function renderAiSettings(containerEl: HTMLElement, section: AiSettingsSe
       text.setPlaceholder('60').setValue(String(ai.timeouts.generateSeconds));
       text.inputEl.addEventListener('change', guarded(async () => {
         const value = text.inputEl.value.trim();
-        if (!value) return;
+        if (!value) {
+          status.setText('');
+          return;
+        }
         if (!/^\d+$/.test(value)) {
           status.setText('1〜600 秒の範囲で入力してください。');
           try {
@@ -245,7 +248,10 @@ export function renderAiSettings(containerEl: HTMLElement, section: AiSettingsSe
       text.setPlaceholder('20').setValue(String(ai.timeouts.judgeSeconds));
       text.inputEl.addEventListener('change', guarded(async () => {
         const value = text.inputEl.value.trim();
-        if (!value) return;
+        if (!value) {
+          status.setText('');
+          return;
+        }
         if (!/^\d+$/.test(value)) {
           status.setText('1〜600 秒の範囲で入力してください。');
           try {
