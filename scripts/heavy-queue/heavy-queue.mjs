@@ -38,7 +38,10 @@ export function defaultQueueDir(env = process.env, platform = process.platform, 
 }
 
 function runPs(args) {
-  const result = spawnSync('/bin/ps', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, LC_ALL: 'C' } });
+  // TZ is pinned: `lstart` is printed in local time, so a waiter with another TZ would otherwise see a different start time
+  // for the same live process and wrongly judge its PID reused (two concurrent heavy jobs, pruned live tickets).
+  const result = spawnSync('/bin/ps', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } });
   if (result.error) refuse(`Cannot run /bin/ps (${result.error.message}); cannot verify queue owners.`);
   return result;
 }
@@ -517,7 +520,11 @@ export function handOff(queue, ticketId, pid) {
   return { ...record, gen };
 }
 
-/** Read-only snapshot (never recovers anything): owner liveness, hold time, overdue flag, waiters in order. */
+/**
+ * Snapshot that never recovers, takes or releases anything: owner liveness, hold time, overdue flag, waiters in order.
+ * Not strictly read-only: opening the queue creates its directories on first use, and an anomaly found while reading
+ * (e.g. a forged release marker) is appended to history.jsonl.
+ */
 export function status(queue) {
   const { system } = queue;
   const owner = readOwner(queue);
@@ -531,9 +538,13 @@ export function status(queue) {
 }
 
 /**
- * Hold the slot while `command` runs (stdio inherited; the child gets the owner token for re-entrance). Termination
+ * Hold the slot while `command` runs (stdio inherited; an acquired or re-entrant child gets the owner token for
+ * re-entrance; a nested check inside a native session gets NO token, so nothing under it can re-enter native). Termination
  * signals delivered to us are ignored while the child runs (a terminal delivers them to the child too), so the slot is
- * released only after the child has exited. Resolves to the child's exit code.
+ * released only after the child has exited. Consequently a SIGTERM sent to this wrapper alone (not to its process group)
+ * is ignored while the child runs: the child keeps the slot until it exits, so stop the child itself. While still waiting
+ * in line (before the child starts) signals are not ignored; a killed waiter leaves a dead ticket that is pruned.
+ * Resolves to the child's exit code.
  */
 export async function run(queue, request, command, args, options = {}) {
   const held = await acquire(queue, request, options);
@@ -541,7 +552,9 @@ export async function run(queue, request, command, args, options = {}) {
   const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
   for (const signal of signals) process.on(signal, ignore);
   try {
-    const child = (options.spawn ?? spawn)(command, args, { stdio: 'inherit', env: { ...request.env, [tokenVariable]: held.owner.token } });
+    const env = { ...request.env };
+    if (held.mode === 'nested') delete env[tokenVariable]; else env[tokenVariable] = held.owner.token;
+    const child = (options.spawn ?? spawn)(command, args, { stdio: 'inherit', env });
     return await new Promise((resolve) => {
       child.once('error', (error) => {
         queue.system.log(`[heavy-queue] could not start the command (${error.code ?? 'error'}); arguments are not shown.`); resolve(1);

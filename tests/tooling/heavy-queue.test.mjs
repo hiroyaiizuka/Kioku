@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { acquire, defaultQueueDir, defaultSystem, formatDuration, handOff, HeavyQueueError, identify, listTickets, openQueue, overdueMs, readOwner, release,
+import { acquire, defaultQueueDir, defaultSystem, formatDuration, handOff, HeavyQueueError, identify, listTickets, processInfo, verify, openQueue, overdueMs, readOwner, release,
   run, status, tokenVariable } from '../../scripts/heavy-queue/heavy-queue.mjs';
 import { assertNativeHeld, heavyQueueEnabled, launchWithQueue, quitWithQueue } from '../../scripts/lib/heavy-queue.mjs';
 import { prepareVault } from '../../scripts/lib/harness.mjs';
@@ -585,6 +585,37 @@ describe('re-entrance and double requests', () => {
     expect(childEnv).toMatchObject({ PATH: '/bin', [tokenVariable]: expect.stringMatching(/^[0-9a-f-]{36}$/u) });
     expect(readOwner(queue)).toBeNull();
   });
+
+  it('a nested check inside this worktree\'s native session runs WITHOUT a token, so nothing under it re-enters native', async () => {
+    const host = fakeHost(); const dir = scratch();
+    const native = await acquire(openQueue(dir, host.proc(951)), request('/w/a', 'native'));
+    let childEnv;
+    const fakeSpawn = (command, args, options) => {
+      childEnv = options.env;
+      const handlers = {};
+      setImmediate(() => handlers.exit(0, null));
+      return { once: (event, handler) => { handlers[event] = handler; } };
+    };
+    const code = await run(openQueue(dir, host.proc(952)), request('/w/a', 'check', { [tokenVariable]: 'inherited-stale-token' }),
+      'npm', ['run', 'check:steps'], { spawn: fakeSpawn });
+    expect(code).toBe(0);
+    expect(childEnv).not.toHaveProperty(tokenVariable);
+    expect(readOwner(openQueue(dir, host.proc(953)))).toMatchObject({ ticketId: native.owner.ticketId, job: 'native' }); // Untouched.
+  });
+});
+
+describe('time zones never change a process identity', () => {
+  it('an owner recorded under one TZ stays live for a waiter under another (real ps on this process)', () => {
+    const saved = process.env.TZ;
+    try {
+      process.env.TZ = 'Asia/Tokyo';
+      const recorded = { pid: process.pid, ...identify(processInfo(process.pid)) };
+      process.env.TZ = 'America/Los_Angeles';
+      expect(verify(recorded, { processInfo })).toEqual({ live: true });
+      process.env.TZ = 'UTC';
+      expect(verify(recorded, { processInfo })).toEqual({ live: true });
+    } finally { if (saved === undefined) delete process.env.TZ; else process.env.TZ = saved; }
+  });
 });
 
 describe('over 30 minutes and clock changes: report only', () => {
@@ -773,6 +804,9 @@ describe('Kioku wiring (opt-in)', () => {
       const run4 = spawnSync(process.execPath, [cli, 'run', '--project', 'p', '--job', 'check', '--', process.execPath, '-e', 'process.exit(4)'],
         { cwd: scratch(), encoding: 'utf8', env });
       expect(run4.status, run4.stderr).toBe(4);
+      const killed = spawnSync(process.execPath, [cli, 'run', '--project', 'p', '--job', 'check', '--', process.execPath, '-e',
+        "process.kill(process.pid, 'SIGKILL')"], { cwd: scratch(), encoding: 'utf8', env });
+      expect(killed.status, killed.stderr).toBe(1); // Killed by a signal: non-zero, never 0.
       const missing = spawnSync(process.execPath, [cli, 'run', '--project', 'p', '--job', 'check', '--', join(scratch(), 'no-such-command')],
         { cwd: scratch(), encoding: 'utf8', env });
       expect(missing.status).toBe(1); expect(missing.stderr).toMatch(/could not start/u);
@@ -782,7 +816,8 @@ describe('Kioku wiring (opt-in)', () => {
     }, realProcessTimeout);
 
     it('git commit → .githooks/pre-commit → npm run check → check:steps: a failing step blocks the commit', () => {
-      for (const [steps, blocked] of [['node -e "process.exit(5)"', true], ['node -e "process.exit(0)"', false]]) {
+      for (const [steps, blocked] of [['node -e "process.exit(5)"', true], [`node -e "process.kill(process.pid, 'SIGKILL')"`, true],
+        ['node -e "process.exit(0)"', false]]) {
         const repo = scratch(); const queueDir = join(scratch(), 'queue');
         mkdirSync(join(repo, '.githooks'));
         writeFileSync(join(repo, '.githooks', 'pre-commit'), readFileSync(join(project, '.githooks', 'pre-commit')), { mode: 0o755 });
@@ -835,9 +870,44 @@ describe('Kioku wiring (opt-in)', () => {
       host.proc(1504));
     expect(stopped).toMatchObject({ status: 'STOPPED', heavyQueue: { released: true, owner: { pid: 4243 } } });
     expect(readOwner(openQueue(dir, host.proc(1505)))).toBeNull();
-    await expect(launchWithQueue('/w/kioku', env, async () => { throw new Error('CDP never answered'); }, host.proc(1506)))
-      .rejects.toThrow(/CDP never answered/u);
+    // Nothing was spawned and no dedicated instance runs: only then is the slot released.
+    await expect(launchWithQueue('/w/kioku', env, async () => { throw new Error('preflight failed'); }, host.proc(1506),
+      { instance: async () => ({ running: false }) })).rejects.toThrow(/preflight failed[\s\S]*slot released \(no dedicated instance runs\)/u);
     expect(readOwner(openQueue(dir, host.proc(1507)))).toBeNull();
     expect(historyEvents(dir)).toEqual(['acquired', 'handed-off', 'released-by-quit', 'acquired', 'released-after-failed-launch']);
+  });
+
+  it('a launch that fails AFTER spawning keeps the slot with the still-running Obsidian until it is gone', async () => {
+    const host = fakeHost(); const dir = scratch(); const env = { ORCA_HEAVY_QUEUE_DIR: dir };
+    const obsidian = { command: 'Obsidian --user-data-dir=/w/kioku/.tooling/obsidian-profile', started: 'o' };
+    // Spawned (reported right after the PID was recorded), then the page never became ready; Obsidian keeps running.
+    await expect(launchWithQueue('/w/kioku', env, async (onSpawned) => {
+      host.table.set(4300, obsidian); onSpawned(4300); throw new Error('Timed out waiting for the dedicated page');
+    }, host.proc(1601, 'node scripts/obsidian-instance-cli.mjs launch'), { instance: async () => { throw new Error('not consulted'); } }))
+      .rejects.toThrow(/Timed out waiting[\s\S]*kept by the still-running dedicated pid 4300/u);
+    host.table.delete(1601); // The launch CLI exits.
+    const viewer = openQueue(dir, host.proc(1602));
+    expect(readOwner(viewer)).toMatchObject({ pid: 4300, job: 'native', worktree: '/w/kioku' });
+    let waiterDone = false;
+    const waiter = acquire(openQueue(dir, host.proc(1603)), request('/w/other')).then((result) => { waiterDone = true; return result; });
+    await settle(() => host.queried.filter((pid) => pid === 4300).length > 10);
+    expect(waiterDone).toBe(false); // No second heavy job while that Obsidian runs.
+    const quit = await quitWithQueue('/w/kioku', env, async () => { host.table.delete(4300); return { status: 'STOPPED', pid: 4300 }; },
+      host.proc(1604));
+    expect(quit.heavyQueue).toMatchObject({ released: true, owner: { pid: 4300 } });
+    release(viewer, (await waiter).owner.ticketId);
+
+    // Spawned, but it died before the failure was reported: confirmed gone, so the slot is released.
+    await expect(launchWithQueue('/w/kioku', env, async (onSpawned) => {
+      host.table.set(4301, obsidian); onSpawned(4301); host.table.delete(4301); throw new Error('Obsidian exited during startup');
+    }, host.proc(1605))).rejects.toThrow(/exited during startup[\s\S]*slot released \(spawned pid 4301 is gone\)/u);
+    expect(readOwner(viewer)).toBeNull();
+
+    // The spawn was not reported, but the recorded dedicated instance runs: the slot is handed to it, not released.
+    await expect(launchWithQueue('/w/kioku', env, async () => {
+      host.table.set(4302, obsidian); throw new Error('CDP never answered');
+    }, host.proc(1606), { instance: async () => ({ running: true, state: { pid: 4302 } }) }))
+      .rejects.toThrow(/CDP never answered[\s\S]*handed to the still-running dedicated pid 4302/u);
+    expect(readOwner(viewer)).toMatchObject({ pid: 4302, job: 'native' });
   });
 });

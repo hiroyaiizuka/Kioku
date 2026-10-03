@@ -2,7 +2,8 @@
 //   node <path>/cli.mjs status
 //   node <path>/cli.mjs run --project <name> --job check|native -- <command> [args...]
 // `run` waits FIFO for the Mac-wide slot, runs the command with inherited stdio, then releases. The worktree is the
-// real path of the current directory. Nothing is ever signalled; `status` is read-only.
+// real path of the current directory. Nothing is ever signalled; `status` never recovers or releases anything (it may
+// create the queue directories on first use and record anomalies in history.jsonl).
 import { realpathSync } from 'node:fs';
 import { defaultQueueDir, defaultSystem, openQueue, run, status } from './heavy-queue.mjs';
 

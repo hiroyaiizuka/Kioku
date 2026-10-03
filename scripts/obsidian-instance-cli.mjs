@@ -11,7 +11,7 @@ try {
     throw new Error('Usage: node scripts/obsidian-instance-cli.mjs launch|quit (no path arguments).');
   }
   const root = projectRoot();
-  const launch = () => launchDedicated(root, process.env, { ...defaultSystem, waitForDedicatedPage, enableCommunityPlugins });
+  const launch = (onSpawned) => launchDedicated(root, process.env, { ...defaultSystem, waitForDedicatedPage, enableCommunityPlugins, onSpawned });
   const quit = () => quitDedicated(root, defaultSystem, resolveQuitTimeout(process.env));
   // Opt-in (KIOKU_HEAVY_QUEUE=1): the Mac-wide native slot is held from launch until quit. Unset: unchanged path.
   const result = !heavyQueueEnabled(process.env) ? await (command === 'launch' ? launch() : quit())

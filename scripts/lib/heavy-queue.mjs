@@ -20,8 +20,12 @@ export function runQueuedCheck(root, env, command, args, system = defaultSystem,
 }
 
 /**
- * harness:launch: wait for the slot, launch, then hand the slot to the dedicated Obsidian PID so it stays held after
- * this CLI exits (until harness:quit, or until that PID is gone). A failed launch releases it.
+ * harness:launch: wait for the slot, launch, and hand the slot to the dedicated Obsidian PID as soon as it is spawned
+ * (`launch(onSpawned)` calls back right after the PID is recorded), so the slot stays held after this CLI exits, and also
+ * when the launch fails later while that Obsidian (detached, unref'd) keeps running. The slot is released only when
+ * nothing was spawned, or the spawned / recorded instance is confirmed gone.
+ * Remaining window (documented in docs/harness.md): if this CLI is killed after acquiring but before the spawn callback
+ * (normally microseconds after spawn), its own PID dies and the next waiter recovers the slot while Obsidian may run.
  */
 export async function launchWithQueue(root, env, launch, system = defaultSystem, options = {}) {
   const queue = kiokuQueue(env, system);
@@ -30,17 +34,41 @@ export async function launchWithQueue(root, env, launch, system = defaultSystem,
     throw new HeavyQueueError(`harness:launch must own the native slot, but runs inside a held ${held.owner.job} slot `
       + `(pid ${held.owner.pid}); run it on its own. Nothing was started.`);
   }
+  const ticketId = held.owner.ticketId;
+  let handed = null; let handOffError = null;
+  const onSpawned = (pid) => {
+    try { handed = handOff(queue, ticketId, pid); handOffError = null; } catch (error) { handOffError = error; }
+  };
+  // Decide the slot after a failure: keep it with a live dedicated instance, release it only when none runs.
+  const settle = async () => {
+    try {
+      if (handed) {
+        if (verify(handed, system).live) return `native slot kept by the still-running dedicated pid ${handed.pid}; run npm run harness:quit.`;
+        release(queue, ticketId, 'released-after-failed-launch');
+        return `native slot released (spawned pid ${handed.pid} is gone).`;
+      }
+      // Loaded only here, so the opt-out paths (e.g. scripts/check.mjs) never import the harness / esbuild modules.
+      const inspect = options.instance ?? (async () => (await import('./obsidian-instance.mjs')).recordedInstance(root));
+      const instance = await inspect();
+      if (instance.running) {
+        onSpawned(instance.state.pid);
+        if (handed) return `native slot handed to the still-running dedicated pid ${handed.pid}; run npm run harness:quit.`;
+        return `a dedicated instance (pid ${instance.state.pid}) still runs but the slot could not be handed to it `
+          + `(${handOffError?.message}); run npm run harness:quit now.`;
+      }
+      release(queue, ticketId, 'released-after-failed-launch');
+      return 'native slot released (no dedicated instance runs).';
+    } catch (error) { return `native slot state unknown (${error.message}); check the queue status, then npm run harness:quit.`; }
+  };
   let result;
-  try { result = await launch(); }
-  catch (error) { release(queue, held.owner.ticketId, 'released-after-failed-launch'); throw error; }
-  let owner;
-  try { owner = handOff(queue, held.owner.ticketId, result.pid); }
-  catch (error) {
-    release(queue, held.owner.ticketId, 'released-after-failed-handoff');
+  try { result = await launch(onSpawned); }
+  catch (error) { error.message = `${error.message}\nheavyQueue: ${await settle()}`; throw error; }
+  if (!handed) onSpawned(result.pid); // A launcher that did not report the spawn.
+  if (!handed) {
     throw new HeavyQueueError(`Dedicated Obsidian pid ${result.pid} started, but the native slot could not be handed to it `
-      + `(${error.message}); the slot was released. Run npm run harness:quit now.`);
+      + `(${handOffError?.message}). ${await settle()} Run npm run harness:quit now.`);
   }
-  return { ...result, heavyQueue: { dir: queue.dir, slot: 'native', waitedMs: held.waitedMs, owner: summary(owner),
+  return { ...result, heavyQueue: { dir: queue.dir, slot: 'native', waitedMs: held.waitedMs, owner: summary(handed),
     note: 'Held by the dedicated instance PID until harness:quit (or until that PID is gone).' } };
 }
 
