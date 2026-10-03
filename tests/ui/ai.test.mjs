@@ -315,30 +315,70 @@ describe('AI settings tab', () => {
     expect(field('タイムアウト：判定').querySelector('input').value).toBe('30');
 
     // Alternating fields without a redraw: each save must start from the latest timeouts, not the drawn ones.
-    await typeInto('タイムアウト：生成', '300');
+    await typeInto('タイムアウト：生成', '300', { blur: true });
     expect(plugin.data.ai.timeouts).toEqual({ generateSeconds: 300, judgeSeconds: 30 });
-    await typeInto('タイムアウト：判定', '45');
+    await typeInto('タイムアウト：判定', '45', { blur: true });
     expect(plugin.data.ai.timeouts).toEqual({ generateSeconds: 300, judgeSeconds: 45 });
-    await typeInto('タイムアウト：生成', '120');
+    await typeInto('タイムアウト：生成', '120', { blur: true });
     expect(plugin.data.ai.timeouts).toEqual({ generateSeconds: 120, judgeSeconds: 45 });
     expect(plugin.data.ai.providers.local.model).toBe('qwen3:8b');
     expect(plugin.data.ai.providers.jev).toEqual({ apiKey: KEY, model: 'jev-latest', consent });
 
     const saves = plugin.saved.length;
     for (const value of ['0', '-5', '']) {
-      await typeInto('タイムアウト：生成', value);
-      await typeInto('タイムアウト：判定', value);
+      await typeInto('タイムアウト：生成', value, { blur: true });
+      await typeInto('タイムアウト：判定', value, { blur: true });
     }
     expect(plugin.saved).toHaveLength(saves);
     expect(plugin.data.ai.timeouts).toEqual({ generateSeconds: 120, judgeSeconds: 45 });
     expect(network.calls).toEqual([]);
   });
 
+  it('timeout validation: saves 600, rejects 601 / floats / scientific notation with an error and restores the saved value', async () => {
+    const consent = 'jev|api.typesafe.ai|jev-latest';
+    const { plugin } = open({ ai: ai({ providers: { local: { model: 'qwen3:8b' }, jev: { apiKey: KEY, consent } },
+      timeouts: { generateSeconds: 60, judgeSeconds: 20 } }) });
+    tab(plugin); await flush();
+
+    await typeInto('タイムアウト：生成', '600', { blur: true });
+    expect(plugin.data.ai.timeouts.generateSeconds).toBe(600);
+    expect(field('タイムアウト：生成').querySelector('.kioku-settings-status').textContent).toBe('');
+
+    await typeInto('タイムアウト：生成', '601', { blur: true });
+    expect(plugin.data.ai.timeouts.generateSeconds).toBe(600);
+    expect(field('タイムアウト：生成').querySelector('.kioku-settings-status').textContent).toContain('1〜600 秒の範囲で入力してください');
+    expect(field('タイムアウト：生成').querySelector('input').value).toBe('600');
+
+    await typeInto('タイムアウト：生成', '1.5', { blur: true });
+    expect(plugin.data.ai.timeouts.generateSeconds).toBe(600);
+    expect(field('タイムアウト：生成').querySelector('.kioku-settings-status').textContent).toContain('1〜600 秒の範囲で入力してください');
+    expect(field('タイムアウト：生成').querySelector('input').value).toBe('600');
+
+    await typeInto('タイムアウト：生成', '1e2', { blur: true });
+    expect(plugin.data.ai.timeouts.generateSeconds).toBe(600);
+    expect(field('タイムアウト：生成').querySelector('.kioku-settings-status').textContent).toContain('1〜600 秒の範囲で入力してください');
+    expect(field('タイムアウト：生成').querySelector('input').value).toBe('600');
+  });
+
+  it('timeout saving only on blur: typing "6" does not save 6, only blur saves after validating the final value', async () => {
+    const { plugin } = open({ ai: ai({ timeouts: { generateSeconds: 60, judgeSeconds: 20 } }) });
+    tab(plugin); await flush();
+
+    await typeInto('タイムアウト：生成', '6', { blur: false });
+    expect(plugin.data.ai.timeouts.generateSeconds).toBe(60);
+
+    await typeInto('タイムアウト：生成', '60', { blur: false });
+    expect(plugin.data.ai.timeouts.generateSeconds).toBe(60);
+
+    await typeInto('タイムアウト：生成', '600', { blur: true });
+    expect(plugin.data.ai.timeouts.generateSeconds).toBe(600);
+  });
+
   it('the generation timeout saved here is the one a run waits for', async () => {
     const { plugin } = open({ ai: ai() });
     network.respond = () => new Promise(() => {});
     tab(plugin); await flush();
-    await typeInto('タイムアウト：生成', '5');
+    await typeInto('タイムアウト：生成', '5', { blur: true });
     expect(plugin.data.ai.timeouts).toEqual({ generateSeconds: 5, judgeSeconds: 20 });
     await extract(plugin);
     section().querySelector('.kioku-ai-run').click(); await flush();
@@ -353,7 +393,7 @@ describe('AI settings tab', () => {
     const { plugin } = open({ ai: ai({ providers: { local: { model: 'qwen3:8b' }, jev: { apiKey: KEY, consent } } }) });
     network.respond = (request) => (request.url.includes('typesafe') ? new Promise(() => {}) : chat(CARDS));
     tab(plugin); await flush();
-    await typeInto('タイムアウト：判定', '3');
+    await typeInto('タイムアウト：判定', '3', { blur: true });
     expect(plugin.data.ai.timeouts).toEqual({ generateSeconds: 60, judgeSeconds: 3 });
     await extract(plugin);
     section().querySelector('.kioku-ai-run').click(); await flush();

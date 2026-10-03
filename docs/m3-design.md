@@ -556,12 +556,14 @@ LEV-277 は複数の PR に分けて実装する。この節はフェーズ A（
 - `requestUrl` の下位タイムアウトの有無（§10【未検証】。無ければ上記のとおり再読み込みまで枠が残る）。
 - §11 の実測（品質・遅延・費用）と README での推奨モデル、§14 の実機確認と `docs/harness.md` への反映。
 
-### 16.4 実装済み（Phase A とその後の PR）
+### 16.3 実装済み（Phase A とその後の PR）
 
 - §5.1 provider 抽象、§10 通信制御、§4 送る本文、§6.1 決定的検査、§5.5 ローカル生成、§5.3 Jev 判定構造、§6.2 分類、§7 同意フロー、§7.3 API キー保存、§8 UI（候補ポップアップ、設定タブ）、§9 生成カード挿入、§12 設定の読み書き。
-- 設定タブの Jev モデル名とタイムアウト（生成・判定）の設定欄。バックエンドは `data.json` の `ai.providers.jev.model` / `ai.timeouts.generateSeconds` / `ai.timeouts.judgeSeconds` を読み書きする。
+- 設定タブのタイムアウト（生成・判定）と Jev モデル名の欄。バックエンドは `data.json` の `ai.timeouts.generateSeconds` / `ai.timeouts.judgeSeconds` / `ai.providers.jev.model` を読み書きする。
 
-### 16.5 実機確認で見ること（フェーズ A 固有）
+接続テストは未実装。
+
+### 16.4 実機確認で見ること（フェーズ A 固有）
 
 - 引用元の段落の最終行に既存の block ID（`^abc`）がある場合、引用にそれが含まれると `%%kioku-src%%` の中に `^abc` が写る。`%%` コメント内の block ID を Obsidian が block として索引しないか（元の段落へのリンクが変わらないか）を確かめる（コードの挙動は変えていない）。
 - §14 のチェックリスト全体。
