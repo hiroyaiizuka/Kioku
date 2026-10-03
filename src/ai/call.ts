@@ -53,6 +53,11 @@ export interface CallOptions {
   readonly signal: AbortSignal;
   /** Budget for sending and retries; time spent waiting for a slot does not count. */
   readonly timeoutMs: number;
+  /**
+   * The user's configured timeout, shown in the timeout message when `timeoutMs` is only what is
+   * left of it (a provider's second request). Defaults to `timeoutMs`.
+   */
+  readonly configuredTimeoutMs?: number;
   /** Called when the call has to wait for a slot held by earlier (possibly abandoned) requests. */
   readonly onWaiting?: () => void;
   /** Called once a slot is held, right before the request is sent (also before each retry). */
@@ -61,7 +66,11 @@ export interface CallOptions {
 
 export type CallResult =
   | { readonly ok: true; readonly response: HttpResponse }
-  | { readonly ok: false; readonly failure: ProviderFailure };
+  /**
+   * `response`: the final non-2xx response, for the provider to inspect internally (e.g. which
+   * field a 400 rejected). Its body must never reach a user-facing message.
+   */
+  | { readonly ok: false; readonly failure: ProviderFailure; readonly response?: HttpResponse };
 
 const RETRY_LIMIT = 3;
 const BASE_BACKOFF_MS = 500;
@@ -129,15 +138,17 @@ export async function call(http: HttpClient, request: HttpRequest, options: Call
     const result = await attempt(http, request, sending, Math.max(0, timeoutMs - spent));
     spent += clock.now() - sentAt;
     if (result.kind === 'cancelled') return { ok: false, failure: { kind: 'cancelled', detail: '' } };
-    if (result.kind === 'timeout') return { ok: false, failure: { kind: 'timeout', detail: `${Math.round(timeoutMs / 1000)} 秒` } };
+    if (result.kind === 'timeout') {
+      return { ok: false, failure: { kind: 'timeout', detail: `${Math.round((options.configuredTimeoutMs ?? timeoutMs) / 1000)} 秒` } };
+    }
     if (result.kind === 'error') return { ok: false, failure: { kind: 'network', detail: '' } };
     const { response } = result;
     if (response.status >= 200 && response.status < 300) return { ok: true, response };
     const failure = statusFailure(response.status);
-    if (failure.kind !== 'rate-limited' && failure.kind !== 'overloaded') return { ok: false, failure };
-    if (retry >= RETRY_LIMIT) return { ok: false, failure };
+    if (failure.kind !== 'rate-limited' && failure.kind !== 'overloaded') return { ok: false, failure, response };
+    if (retry >= RETRY_LIMIT) return { ok: false, failure, response };
     const wait = retryAfterMs(response.headers) ?? BASE_BACKOFF_MS * 2 ** retry + Math.floor(clock.random() * 250);
-    if (spent + wait >= timeoutMs) return { ok: false, failure };
+    if (spent + wait >= timeoutMs) return { ok: false, failure, response };
     const waitStarted = clock.now();
     if (!(await clock.sleep(wait, signal))) return { ok: false, failure: { kind: 'cancelled', detail: '' } };
     spent += clock.now() - waitStarted;

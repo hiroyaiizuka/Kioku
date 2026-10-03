@@ -40,7 +40,7 @@ describe('call', () => {
     await clock.advance(1); expect(http.requests).toHaveLength(2);
     await clock.advance(1000); expect(http.requests).toHaveLength(3);
     await clock.advance(2000); expect(http.requests).toHaveLength(4);
-    expect(await pending).toEqual({ ok: false, failure: { kind: 'overloaded', detail: 'HTTP 529' } });
+    expect(await pending).toMatchObject({ ok: false, failure: { kind: 'overloaded', detail: 'HTTP 529' }, response: { status: 529 } });
   });
 
   it('stops retrying when the backoff would exceed the timeout', async () => {
@@ -48,7 +48,7 @@ describe('call', () => {
     const http = fakeHttp(() => json({}, 429, { 'retry-after': '30' }));
     const result = await call(http, REQUEST, options(clock, new SlotGate(4)));
     expect(http.requests).toHaveLength(1);
-    expect(result).toEqual({ ok: false, failure: { kind: 'rate-limited', detail: 'HTTP 429' } });
+    expect(result).toMatchObject({ ok: false, failure: { kind: 'rate-limited', detail: 'HTTP 429' }, response: { status: 429 } });
   });
 
   it('times out by no longer waiting, but keeps the slot until the hung request settles', async () => {

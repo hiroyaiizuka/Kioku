@@ -99,27 +99,65 @@ describe('providers', () => {
     expect(parseGeneration('not json')).toBeNull();
   });
 
-  it('asks once more without reasoning_effort when the server rejects it (HTTP 400), within the same budget', async () => {
+  it('asks once more without reasoning_effort only when a 400 rejects that field', async () => {
     const ai = settings();
-    const make = (http) => createLocalGenerator({ settings: ai.providers.local, http, clock: fakeClock(), gate: new SlotGate(1), timeoutMs: 60000 });
-    const rejectsField = fakeHttp((request) => ('reasoning_effort' in JSON.parse(request.body)
-      ? json({ error: { message: 'invalid reasoning value: "none"' } }, 400) : chat({ cards: [CARDS.cards[0]] })));
-    const outcome = await make(rejectsField).generate({ source: '本文', maxCandidates: 20 }, new AbortController().signal);
+    const make = (http, clock = fakeClock()) => createLocalGenerator({ settings: ai.providers.local, http, clock, gate: new SlotGate(1), timeoutMs: 60000 });
+    const input = { source: '本文', maxCandidates: 20 };
+    const REJECTED = json({ error: { message: 'invalid reasoning value: "none" (must be "low", "medium" or "high")', type: 'invalid_request_error' } }, 400);
+    const rejectsField = fakeHttp((request) => ('reasoning_effort' in JSON.parse(request.body) ? REJECTED : chat({ cards: [CARDS.cards[0]] })));
+    const outcome = await make(rejectsField).generate(input, new AbortController().signal);
     expect(outcome).toMatchObject({ ok: true, value: { candidates: [CARDS.cards[0]] } });
     expect(rejectsField.requests.map((request) => JSON.parse(request.body).reasoning_effort)).toEqual(['none', undefined]);
-    // A 400 that is not about the field still fails clearly after the one retry (no loop).
-    const always400 = fakeHttp(() => json({ error: 'bad' }, 400));
-    expect(await make(always400).generate({ source: '本文', maxCandidates: 20 }, new AbortController().signal))
-      .toMatchObject({ ok: false, failure: { kind: 'invalid-request', detail: 'HTTP 400' } });
-    expect(always400.requests).toHaveLength(2);
+    // An unrelated 400 is not about the field: no second send of the note, and a clear failure.
+    const unrelated = fakeHttp(() => json({ error: { message: 'messages: content too long' } }, 400));
+    const failed = await make(unrelated).generate(input, new AbortController().signal);
+    expect(failed).toMatchObject({ ok: false, failure: { kind: 'invalid-request', detail: 'HTTP 400' } });
+    expect(unrelated.requests).toHaveLength(1);
+    expect(failureMessage(failed.failure, { label: 'Ollama（qwen3:8b）', where: 'http://localhost:11434', external: false }))
+      .toBe('要求が受け付けられませんでした（Ollama（qwen3:8b）、HTTP 400）。本文が長すぎる場合は範囲を選んでください。');
     // Other failures are not retried, and servers without the field never retry.
     const notFound = fakeHttp(() => json({ error: 'model not found' }, 404));
-    await make(notFound).generate({ source: '本文', maxCandidates: 20 }, new AbortController().signal);
+    await make(notFound).generate(input, new AbortController().signal);
     expect(notFound.requests).toHaveLength(1);
-    const llama = fakeHttp(() => json({ error: 'bad' }, 400));
+    const llama = fakeHttp(() => REJECTED);
     await createLocalGenerator({ settings: { ...ai.providers.local, server: 'llamacpp', baseUrl: 'http://localhost:8080' }, http: llama,
-      clock: fakeClock(), gate: new SlotGate(1), timeoutMs: 60000 }).generate({ source: '本文', maxCandidates: 20 }, new AbortController().signal);
+      clock: fakeClock(), gate: new SlotGate(1), timeoutMs: 60000 }).generate(input, new AbortController().signal);
     expect(llama.requests).toHaveLength(1);
+  });
+
+  it('gives the second request only what is left of the budget, and skips it when nothing is left or cancelled', async () => {
+    const ai = settings();
+    const input = { source: '本文', maxCandidates: 20 };
+    const REJECTED = { status: 400, text: JSON.stringify({ error: { message: 'invalid reasoning value: "none"' } }) };
+    // The rejection arrives after 50 s: the retry has 10 s left (not a fresh 60 s) and reports the configured timeout.
+    const clock = fakeClock();
+    const http = fakeHttp(() => 'hang');
+    const generator = createLocalGenerator({ settings: ai.providers.local, http, clock, gate: new SlotGate(1), timeoutMs: 60000 });
+    const pending = generator.generate(input, new AbortController().signal);
+    await clock.advance(50000);
+    http.release(0, REJECTED);
+    await drain();
+    expect(http.requests).toHaveLength(2);
+    await clock.advance(9999);
+    expect(clock.pending()).toBe(1);
+    await clock.advance(1);
+    expect(await pending).toMatchObject({ ok: false, failure: { kind: 'timeout', detail: '60 秒' } });
+    // Nothing left: the rejection came at the end of the budget (the clock jumps past it).
+    const base = fakeClock();
+    let skew = 0;
+    const skewed = { ...base, now: () => base.now() + skew };
+    const late = fakeHttp(() => { skew = 61000; return REJECTED; });
+    const lateOutcome = await createLocalGenerator({ settings: ai.providers.local, http: late, clock: skewed, gate: new SlotGate(1),
+      timeoutMs: 60000 }).generate(input, new AbortController().signal);
+    expect(late.requests).toHaveLength(1);
+    expect(lateOutcome).toMatchObject({ ok: false, failure: { kind: 'invalid-request' } });
+    // Cancelled while the first request was in flight: no second request.
+    const controller = new AbortController();
+    const cancelled = fakeHttp(() => { controller.abort(); return REJECTED; });
+    const cancelledOutcome = await createLocalGenerator({ settings: ai.providers.local, http: cancelled, clock: fakeClock(), gate: new SlotGate(1),
+      timeoutMs: 60000 }).generate(input, controller.signal);
+    expect(cancelled.requests).toHaveLength(1);
+    expect(cancelledOutcome).toMatchObject({ ok: false, failure: { kind: 'cancelled' } });
     expect(parseGeneration('{"cards":[]}')).toEqual({ candidates: [], malformed: 0 });
   });
 });

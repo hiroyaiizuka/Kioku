@@ -42,16 +42,24 @@ export function parseGeneration(content: string): GenerationValue | null {
 }
 
 /**
- * Server-specific request fields. Ollama: `reasoning_effort: "none"` turns the model's thinking off
- * on the OpenAI-compatible endpoint (Ollama maps it to `think: false`; models without thinking
- * ignore it). Thinking models otherwise reason at length before the JSON — measured on gemma4:26b
- * (docs/m3-design.md §16.2): ~5,000 characters of reasoning and 180 s to over 300 s; without it
- * 31–96 s depending on system load (stable success within 60 s is not established). llama.cpp and LM Studio have no verified equivalent, so nothing is added for
- * them. A server that rejects the field (HTTP 400, as Ollama does for a value it does not know) is
- * asked once more without it.
+ * Server-specific request fields. Ollama: `reasoning_effort: "none"` maps to `think: false` for
+ * boolean-thinking models (per docs.ollama.com/api/openai-compatibility); the behaviour on other
+ * models is unverified. Measured only on gemma4:26b (docs/m3-design.md §16.2): with thinking,
+ * ~5,000 characters of reasoning and 180 s to over 300 s; without it on this product path
+ * 45.5–95.6 s depending on system load (stable success within 60 s is not established).
+ * llama.cpp and LM Studio have no verified equivalent, so nothing is added for them.
  */
 export function serverOptions(server: LocalProviderSettings['server']): Record<string, unknown> {
   return server === 'ollama' ? { reasoning_effort: 'none' } : {};
+}
+
+/**
+ * True when an HTTP 400 says the reasoning field was rejected (Ollama: `invalid reasoning value: …`).
+ * Only then is the note sent a second time; any other 400 fails as is, so an unrelated error never
+ * re-sends the note (it may go to an external model). The body is inspected here only, never shown.
+ */
+export function rejectedReasoningField(response: { readonly status: number; readonly text: string } | undefined): boolean {
+  return response?.status === 400 && /reasoning/i.test(response.text);
 }
 
 export function createLocalGenerator(options: LocalGeneratorOptions): GeneratorProvider {
@@ -80,14 +88,18 @@ export function createLocalGenerator(options: LocalGeneratorOptions): GeneratorP
           response_format: { type: 'json_schema', json_schema: { name: 'kioku_cards', strict: true, schema: GENERATION_SCHEMA } },
           ...extra,
         }),
-      }, { gate: options.gate, clock: options.clock, signal, timeoutMs, onWaiting: progress?.onWaiting, onSending: () => {
-        sentAt ??= options.clock.now();
-        progress?.onSending?.();
-      } });
+      }, {
+        gate: options.gate, clock: options.clock, signal, timeoutMs, configuredTimeoutMs: options.timeoutMs,
+        onWaiting: progress?.onWaiting,
+        onSending: () => {
+          sentAt ??= options.clock.now();
+          progress?.onSending?.();
+        },
+      });
       const extra = serverOptions(settings.server);
       let result = await send(extra, options.timeoutMs);
-      if (!result.ok && result.failure.kind === 'invalid-request' && result.failure.detail === 'HTTP 400' && Object.keys(extra).length) {
-        // The server rejected an optional field: ask once more without it, within the same budget.
+      if (!result.ok && Object.keys(extra).length && rejectedReasoningField(result.response)) {
+        // The server rejected the optional field: ask once more without it, with what is left of the budget.
         const remaining = options.timeoutMs - (options.clock.now() - (sentAt ?? started));
         if (remaining > 0 && !signal.aborted) result = await send({}, remaining);
       }
