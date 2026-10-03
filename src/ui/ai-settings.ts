@@ -1,7 +1,7 @@
 // The AI section of the settings tab (docs/m3-design.md §7, §8). Showing it never touches the
 // network; keys are stored in data.json in plain text (Q5) and are never shown in full.
 import { Setting } from 'obsidian';
-import { JEV_HOST, LOCAL_DEFAULT_URLS, LOCAL_SERVER_LABELS, consentFingerprint, hasConsent, hostOf, isCloudModel,
+import { JEV_DEFAULT_MODEL, JEV_HOST, LOCAL_DEFAULT_URLS, LOCAL_SERVER_LABELS, consentFingerprint, hasConsent, hostOf, isCloudModel,
   localIsExternal, maskedKey, normalizeBaseUrl, type AiSettings, type LocalServer } from '../ai/settings';
 
 export interface AiSettingsSection {
@@ -211,8 +211,8 @@ export function renderAiSettings(containerEl: HTMLElement, section: AiSettingsSe
     .setName('Jev：モデル名')
     .setDesc('既定は jev-latest（小文字）。変更する必要がある場合だけ設定してください。')
     .addText((text) => {
-      text.setPlaceholder('Jev-latest').setValue(jev.model).onChange(guarded(async (value: string) => {
-        await save(withJev(() => ({ model: value.trim().toLowerCase() || 'jev-latest' })));
+      text.setPlaceholder(JEV_DEFAULT_MODEL).setValue(jev.model).onChange(guarded(async (value: string) => {
+        await save(withJev(() => ({ model: value.trim() || JEV_DEFAULT_MODEL })));
       }));
       text.inputEl.addEventListener('change', redrawAfterSave);
     });
