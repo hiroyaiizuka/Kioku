@@ -14,10 +14,14 @@ import { cleanup, createFixture } from '../helpers/fixture.mjs';
 
 // Observes every rename / link / unlink made through node:fs (passthrough otherwise), so a concurrency test can check an
 // invariant at the exact instant between two filesystem steps of the code under test, without relying on timing.
-const fsObserver = { after: null };
+// `before` runs first and may throw to inject a failure of that step (the real call is then not made).
+const fsObserver = { before: null, after: null };
 vi.mock('node:fs', async (importOriginal) => {
   const real = await importOriginal();
-  const watched = (name) => (...args) => { const result = real[name](...args); fsObserver.after?.(name, args); return result; };
+  const watched = (name) => (...args) => {
+    fsObserver.before?.(name, args);
+    const result = real[name](...args); fsObserver.after?.(name, args); return result;
+  };
   return { ...real, default: real, renameSync: watched('renameSync'), linkSync: watched('linkSync'), unlinkSync: watched('unlinkSync') };
 });
 
@@ -26,7 +30,7 @@ const library = join(project, 'scripts', 'heavy-queue', 'heavy-queue.mjs');
 const cli = join(project, 'scripts', 'heavy-queue', 'cli.mjs');
 const temporary = []; const fixtures = [];
 afterEach(() => {
-  fsObserver.after = null;
+  fsObserver.before = null; fsObserver.after = null;
   while (fixtures.length) cleanup(fixtures.pop());
   while (temporary.length) { const dir = temporary.pop(); chmodSync(dir, 0o700); rmSync(dir, { recursive: true, force: true }); }
 });
@@ -839,10 +843,14 @@ describe('Kioku wiring (opt-in)', () => {
 
   it('harness:launch hands the native slot to the dedicated PID, which keeps it after the launch CLI exits', async () => {
     const host = fakeHost(); const dir = scratch(); const env = { ORCA_HEAVY_QUEUE_DIR: dir };
+    const signalListeners = () => ['SIGINT', 'SIGTERM', 'SIGHUP'].map((signal) => process.listeners(signal));
+    const listenersBefore = signalListeners();
     const launched = await launchWithQueue('/w/kioku', env, async () => {
       host.table.set(4242, { command: 'Obsidian --user-data-dir=/w/kioku/.tooling/obsidian-profile', started: 'x' });
       return { status: 'LAUNCHED', pid: 4242 };
     }, host.proc(1401, 'node scripts/obsidian-instance-cli.mjs launch'));
+    expect(host.logs.some((line) => /GUARD/u.test(line))).toBe(false); // Handed off at once: no guard.
+    expect(signalListeners()).toEqual(listenersBefore); // The normal path never installs signal listeners.
     expect(launched.heavyQueue).toMatchObject({ slot: 'native', waitedMs: 0, owner: { pid: 4242, job: 'native',
       launcher: { pid: 1401, executable: 'node', ...identify({ command: 'node scripts/obsidian-instance-cli.mjs launch', started: 'x' }),
         started: 'Sat Oct  3 00:00:00 2026' } } });
@@ -909,5 +917,180 @@ describe('Kioku wiring (opt-in)', () => {
     }, host.proc(1606), { instance: async () => ({ running: true, state: { pid: 4302 } }) }))
       .rejects.toThrow(/CDP never answered[\s\S]*handed to the still-running dedicated pid 4302/u);
     expect(readOwner(viewer)).toMatchObject({ pid: 4302, job: 'native' });
+  });
+});
+
+describe('harness:launch never leaves a running dedicated instance without the native slot (guard, no timing)', () => {
+  const obsidian = { command: 'Obsidian --user-data-dir=/w/kioku/.tooling/obsidian-profile', started: 'o' };
+  const track = (promise) => {
+    const state = { done: false };
+    state.promise = promise.then((value) => { state.done = true; return value; });
+    return state;
+  };
+  /** launchWithQueue as the launch CLI `system`: once the call returns or throws, that CLI process exits (pid leaves the table). */
+  function startLaunch(host, env, system, launch, options) {
+    const state = { done: false };
+    state.promise = launchWithQueue('/w/kioku', env, launch, system, options)
+      .then((value) => ({ value }), (error) => ({ error }))
+      .then((outcome) => { state.done = true; host.table.delete(system.pid); return outcome; });
+    return state;
+  }
+  /** Recorded-instance probe (fake of recordedInstance): counts calls; `running` is flipped by the test. */
+  function fakeInstance(pid) {
+    const probe = { running: true, calls: 0 };
+    probe.inspect = async () => { probe.calls += 1; return { running: probe.running, state: { pid } }; };
+    return probe;
+  }
+
+  it('handOff failing in onSpawned AND after the launch (owner record not rewritable) keeps the slot while the instance runs', async () => {
+    for (const [shape, end] of [['launch failed after spawn', 'instance gone'], ['launch succeeded', 'harness:quit']]) {
+      const host = fakeHost(); const dir = scratch(); const env = { ORCA_HEAVY_QUEUE_DIR: dir };
+      const listeners = process.listenerCount('SIGINT');
+      // Every rewrite of an owner generation file fails (handOff's atomic rename); everything else works.
+      fsObserver.before = (name, args) => {
+        if (name === 'renameSync' && String(args[1]).startsWith(`${join(dir, 'owner')}/`)) {
+          throw Object.assign(new Error('EIO: injected owner rewrite failure'), { code: 'EIO' });
+        }
+      };
+      const probe = fakeInstance(4400);
+      const launcher = startLaunch(host, env, host.proc(1701, 'node scripts/obsidian-instance-cli.mjs launch'), async (onSpawned) => {
+        host.table.set(4400, obsidian); onSpawned(4400);
+        if (shape === 'launch failed after spawn') throw new Error('Timed out waiting for the dedicated page');
+        return { status: 'LAUNCHED', pid: 4400 };
+      }, { guardMs: 1000, instance: probe.inspect });
+      await settle(() => probe.calls > 0); // The launcher holds the slot and has started guarding.
+      // Another worktree's check and another project's native job wait in line.
+      const check = track(acquire(openQueue(dir, host.proc(1702)), request('/w/other', 'check')));
+      const native = track(acquire(openQueue(dir, host.proc(1703)), { ...request('/w/mappy', 'native'), project: 'mappy' }));
+      await settle(() => probe.calls > 6 && host.queried.filter((pid) => pid === 1701).length > 12);
+      expect(launcher.done).toBe(false); // It stays as the live owner instead of exiting.
+      expect(check.done).toBe(false); expect(native.done).toBe(false);
+      const viewer = openQueue(dir, host.proc(1704));
+      expect(readOwner(viewer)).toMatchObject({ pid: 1701, job: 'native', worktree: '/w/kioku' });
+      expect(status(viewer).owner.live).toBe(true);
+      expect(host.logs.find((line) => /GUARD/u.test(line))).toMatch(/pid 4400\) still runs but the slot could not be handed[\s\S]*EIO/u);
+      expect(process.listenerCount('SIGINT')).toBe(listeners + 1); // Ignored while guarding.
+
+      if (end === 'instance gone') { probe.running = false; host.table.delete(4400); }
+      else {
+        const quit = await quitWithQueue('/w/kioku', env, async () => {
+          probe.running = false; host.table.delete(4400); return { status: 'STOPPED', pid: 4400 };
+        }, host.proc(1705));
+        expect(quit.heavyQueue).toMatchObject({ released: false });
+        expect(quit.heavyQueue.note).toMatch(/guarding harness:launch: it releases the slot by itself/u);
+      }
+      const { error } = await launcher.promise;
+      expect(error.message).toMatch(shape === 'launch failed after spawn'
+        ? /Timed out waiting[\s\S]*native slot released \(no dedicated instance runs now\)/u
+        : /pid 4400 started, but the native slot could not be handed to it \(EIO[\s\S]*released \(no dedicated instance runs now\)/u);
+      expect(process.listenerCount('SIGINT')).toBe(listeners);
+      // Only now, FIFO: the check first, then the other native job.
+      const checkHeld = await check.promise;
+      expect(checkHeld).toMatchObject({ mode: 'acquired', owner: { pid: 1702 } });
+      expect(native.done).toBe(false);
+      release(viewer, checkHeld.owner.ticketId);
+      expect((await native.promise).owner).toMatchObject({ pid: 1703, project: 'mappy', job: 'native' });
+      expect(historyEvents(dir).slice(0, 2)).toEqual(['acquired', 'released-after-failed-launch']);
+      fsObserver.before = null;
+    }
+  });
+
+  it('signals delivered after the first failed handOff and during the guard\'s pending first inspect never end the owner', async () => {
+    const host = fakeHost(); const dir = scratch(); const env = { ORCA_HEAVY_QUEUE_DIR: dir };
+    const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+    const before = Object.fromEntries(signals.map((signal) => [signal, process.listeners(signal)]));
+    const added = (signal) => process.listeners(signal).filter((listener) => !before[signal].includes(listener));
+    /** Deliver each signal to the listeners this launch installed (the test never sends a real signal to its own process). */
+    const deliver = () => { for (const signal of signals) for (const listener of added(signal)) listener(signal); };
+    fsObserver.before = (name, args) => {
+      if (name === 'renameSync' && String(args[1]).startsWith(`${join(dir, 'owner')}/`)) {
+        throw Object.assign(new Error('EIO: injected owner rewrite failure'), { code: 'EIO' });
+      }
+    };
+    let pageFails; const page = new Promise((resolve) => { pageFails = resolve; });
+    const answers = []; // Each inspect pends until the test answers it.
+    const inspect = () => new Promise((resolve) => { answers.push(resolve); });
+    const launcher = startLaunch(host, env, host.proc(2001, 'node scripts/obsidian-instance-cli.mjs launch'), async (onSpawned) => {
+      host.table.set(4700, obsidian); onSpawned(4700); await page; throw new Error('Timed out waiting for the dedicated page');
+    }, { guardMs: 1000, instance: inspect });
+    await settle(() => host.queried.includes(4700)); // handOff was attempted (and failed) right after the spawn.
+    // Still waiting for the page: the owner is this launcher, so signals are already ignored.
+    for (const signal of signals) expect(added(signal)).toHaveLength(1);
+    deliver();
+    const check = track(acquire(openQueue(dir, host.proc(2002)), request('/w/other', 'check')));
+    const native = track(acquire(openQueue(dir, host.proc(2003)), { ...request('/w/mappy', 'native'), project: 'mappy' }));
+    pageFails();
+    await settle(() => answers.length === 1); // The guard's first inspect is pending.
+    for (const signal of signals) expect(added(signal)).toHaveLength(1);
+    deliver();
+    await settle(() => host.queried.filter((pid) => pid === 2001).length > 12);
+    expect(launcher.done).toBe(false); expect(check.done).toBe(false); expect(native.done).toBe(false);
+    const viewer = openQueue(dir, host.proc(2004));
+    expect(readOwner(viewer)).toMatchObject({ pid: 2001, job: 'native', worktree: '/w/kioku' });
+    expect(status(viewer).owner.live).toBe(true);
+
+    answers[0]({ running: true, state: { pid: 4700 } }); // Still runs, handOff fails again: keep guarding.
+    await settle(() => answers.length === 2);
+    deliver();
+    expect(launcher.done).toBe(false); expect(check.done).toBe(false); expect(native.done).toBe(false);
+    host.table.delete(4700);
+    answers[1]({ running: false, state: null }); // The instance is gone.
+    expect((await launcher.promise).error.message).toMatch(/Timed out waiting[\s\S]*native slot released \(no dedicated instance runs now\)/u);
+    for (const signal of signals) expect(added(signal)).toEqual([]); // Removed once the launch returned.
+    const checkHeld = await check.promise;
+    expect(checkHeld.owner.pid).toBe(2002);
+    release(viewer, checkHeld.owner.ticketId);
+    expect((await native.promise).owner).toMatchObject({ pid: 2003, project: 'mappy' });
+  });
+
+  it('a transient ps failure for the dedicated PID: no takeover while it fails, then the slot is handed to the instance', async () => {
+    const host = fakeHost(); const dir = scratch(); const env = { ORCA_HEAVY_QUEUE_DIR: dir };
+    const system = host.proc(1801, 'node scripts/obsidian-instance-cli.mjs launch');
+    const probe = fakeInstance(4500);
+    let psBroken = true; let psFailures = 0;
+    const real = system.processInfo;
+    system.processInfo = (pid) => {
+      if (pid === 4500 && psBroken) { psFailures += 1; throw new HeavyQueueError('ps failed (2); cannot verify pid 4500. Refusing to judge the queue.'); }
+      return real(pid);
+    };
+    const launcher = startLaunch(host, env, system, async (onSpawned) => {
+      host.table.set(4500, obsidian); onSpawned(4500); throw new Error('CDP never answered');
+    }, { guardMs: 1000, instance: probe.inspect });
+    await settle(() => probe.calls > 0);
+    const waiter = track(acquire(openQueue(dir, host.proc(1802)), request('/w/other')));
+    await settle(() => probe.calls > 4 && host.queried.filter((pid) => pid === 1801).length > 4);
+    expect(psFailures).toBeGreaterThanOrEqual(3); // onSpawned, right after the failure, and while guarding.
+    expect(launcher.done).toBe(false); expect(waiter.done).toBe(false);
+
+    psBroken = false; // ps works again: the guard hands the slot over and the launch CLI exits.
+    const { error } = await launcher.promise;
+    expect(error.message).toMatch(/CDP never answered[\s\S]*handed to the still-running dedicated pid 4500 after retrying/u);
+    const viewer = openQueue(dir, host.proc(1803));
+    expect(readOwner(viewer)).toMatchObject({ pid: 4500, job: 'native', launcher: { pid: 1801 } });
+    await settle(() => host.queried.filter((pid) => pid === 4500).length > 10);
+    expect(waiter.done).toBe(false); // Held by the dedicated PID after the launcher exited.
+    host.table.delete(4500);
+    expect((await waiter.promise).owner.pid).toBe(1802);
+    expect(historyEvents(dir).slice(0, 3)).toEqual(['acquired', 'handed-off', 'recovered-owner']);
+  });
+
+  it('when it cannot even tell whether an instance runs, it guards instead of exiting', async () => {
+    const host = fakeHost(); const dir = scratch(); const env = { ORCA_HEAVY_QUEUE_DIR: dir };
+    let broken = true; let calls = 0;
+    const inspect = async () => {
+      calls += 1;
+      if (broken) throw new Error('ps failed (2); cannot verify pid 4600.');
+      return { running: false, state: null };
+    };
+    const launcher = startLaunch(host, env, host.proc(1901), async () => { throw new Error('preflight failed'); },
+      { guardMs: 1000, instance: inspect });
+    await settle(() => calls > 0);
+    const waiter = track(acquire(openQueue(dir, host.proc(1902)), request('/w/other')));
+    await settle(() => calls > 4 && host.queried.filter((pid) => pid === 1901).length > 4);
+    expect(launcher.done).toBe(false); expect(waiter.done).toBe(false);
+    expect(host.logs.find((line) => /GUARD/u.test(line))).toMatch(/cannot tell whether a dedicated instance runs/u);
+    broken = false;
+    expect((await launcher.promise).error.message).toMatch(/preflight failed[\s\S]*native slot released \(no dedicated instance runs now\)/u);
+    expect((await waiter.promise).owner.pid).toBe(1902);
   });
 });
