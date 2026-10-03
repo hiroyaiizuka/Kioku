@@ -43,6 +43,8 @@ const settle = async (predicate, rounds = 500) => {
   throw new Error('condition not reached');
 };
 const pause = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+// Child results resolve on 'close' (after stdio is fully read), not 'exit' (which can fire first), so output assertions
+// (including the no-secret checks) always see every byte.
 /** Poll real processes; never falls through silently (a slow machine fails here with the reason, not later). */
 async function waitUntil(predicate, what, limitMs = 45000) {
   const end = Date.now() + limitMs;
@@ -91,17 +93,20 @@ describe('FIFO order', () => {
     const job = (name) => `const fs=process.getBuiltinModule('node:fs');fs.appendFileSync(${JSON.stringify(log)},'start ${name}\\n');`
       + `const t=setInterval(()=>{if(fs.existsSync(${JSON.stringify(finish)})){clearInterval(t);`
       + `fs.appendFileSync(${JSON.stringify(log)},'end ${name}\\n');}},10)`;
+    const live = {};
     const start = (name, worktree) => {
       mkdirSync(worktree, { recursive: true });
       const child = spawn(process.execPath, [cli, 'run', '--project', 'pilot', '--job', 'check', '--', process.execPath, '-e', job(name)],
         { cwd: worktree, env: { ...process.env, ORCA_HEAVY_QUEUE_DIR: dir }, stdio: ['ignore', 'pipe', 'pipe'] });
-      let stderr = ''; child.stderr.on('data', (chunk) => { stderr += chunk; });
-      return new Promise((resolve) => { child.on('exit', (code) => resolve({ code, stderr })); });
+      live[name] = ''; child.stderr.on('data', (chunk) => { live[name] += chunk; });
+      return new Promise((resolve) => { child.on('close', (code) => resolve({ code, stderr: live[name] })); });
     };
     const first = start('A', join(scratch(), 'a'));
     await waitUntil(() => existsSync(log), 'A to start its job');
     const second = start('B', join(scratch(), 'b'));
-    await waitUntil(() => readdirSync(join(dir, 'tickets')).length === 1, 'B to queue behind A');
+    // A ends only after B has reported waiting: a queued ticket alone does not mean B has looked at the owner yet
+    // (under load B's ps checks can outlast A, and B would then rightly take the free slot without waiting).
+    await waitUntil(() => live.B.includes('waiting for the check slot'), 'B to report waiting behind A');
     writeFileSync(finish, '');
     const [a, b] = await Promise.all([first, second]);
     expect(a.code, a.stderr).toBe(0); expect(b.code, b.stderr).toBe(0);
@@ -131,7 +136,7 @@ describe('FIFO order', () => {
       const children = ['x', 'y'].map((name) => {
         const child = spawn(process.execPath, [script, dir, name, go, log], { stdio: ['ignore', 'ignore', 'pipe'] });
         let stderr = ''; child.stderr.on('data', (chunk) => { stderr += chunk; });
-        return new Promise((resolve) => { child.on('exit', (code) => resolve({ code, stderr })); });
+        return new Promise((resolve) => { child.on('close', (code) => resolve({ code, stderr })); });
       });
       await waitUntil(() => existsSync(`${go}.ready-x`) && existsSync(`${go}.ready-y`), `round ${round}: both children at the barrier`);
       writeFileSync(go, '');
@@ -171,7 +176,7 @@ describe('command lines may carry credentials: only digest + executable basename
       const child = spawn(process.execPath, [cli, 'run', '--project', 'pilot', '--job', 'check', '--', process.execPath, '-e', script, '--', flag],
         { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
       let output = ''; child.stdout.on('data', (chunk) => { output += chunk; }); child.stderr.on('data', (chunk) => { output += chunk; });
-      return new Promise((resolve) => { child.on('exit', (code) => resolve({ code, output })); });
+      return new Promise((resolve) => { child.on('close', (code) => resolve({ code, output })); });
     };
     const once = (cwd, args) => { const result = spawnSync(process.execPath, [cli, ...args], { cwd, env, encoding: 'utf8' });
       return { code: result.status, output: result.stdout + result.stderr }; };
