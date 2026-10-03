@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MockTFile, compilePlugin, installDom } from '../helpers/obsidian-mock.mjs';
+import { MockTFile, compilePlugin, installDom, network } from '../helpers/obsidian-mock.mjs';
 
 /** Every note-related API throws and is recorded; only event registration (`workspace.on`) is allowed. */
 function denyNoteIO(calls, path) {
@@ -56,13 +56,21 @@ describe('actual plugin source: startup and status popup', () => {
     status(plugin).callback(); status(plugin).callback();
     const modals = document.querySelectorAll('.kioku-startup-modal'); expect(modals).toHaveLength(1);
     expect(modals[0].textContent).toContain('デッキで、採用したカードを間隔反復の日程で復習できます');
-    expect(modals[0].textContent).toContain('実機確認はまだです');
-    expect(modals[0].textContent).toContain('AI による候補作成は未実装');
+    expect(modals[0].textContent).toContain('テスト専用の保管場所での実機確認がまだです');
+    expect(modals[0].textContent).toContain('AI による候補作成（一部実装）：設定したときだけ動き、候補は人が確認して採用します');
+    expect(modals[0].textContent).toContain('ほかの判定・生成の方式は未実装です');
     expect(modals[0].textContent).toContain('この画面を開くだけではノートを読み書きしません');
     const identity = modals[0].querySelector('.kioku-build-identity');
     expect(identity.dataset).toMatchObject({ kiokuVersion: '0.0.1', kiokuBuildId: 'unit-build' });
     document.querySelector('.kioku-startup-close').click(); expect(document.querySelector('.kioku-startup-modal')).toBeNull();
     plugin.onunload(); expect(app.ioCalls).toEqual([]);
+    expect(network.calls).toEqual([]);
+  });
+  it('detects a startup mutant that sends a network request (AI must wait for the run button)', async () => {
+    const source = readFileSync('src/main.ts', 'utf8').replace("ribbon.addClass('kioku-ribbon');",
+      "ribbon.addClass('kioku-ribbon'); void ai.runtime.http.request({ url: 'http://localhost:11434/api/tags', method: 'GET' }).catch(() => undefined);");
+    const Mutant = await compilePlugin(source, notices); const plugin = new Mutant(deniedApp()); plugin.onload();
+    expect(network.calls.map((call) => call.url)).toEqual(['http://localhost:11434/api/tags']);
   });
   it('closes an open status popup on unload and can open after close', () => {
     const app = deniedApp(); const plugin = new Plugin(app); plugin.onload(); status(plugin).callback();

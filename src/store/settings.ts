@@ -1,4 +1,5 @@
 // Settings live in the plugin's data.json (Plugin.loadData / saveData); review data never does.
+import { DEFAULT_AI_SETTINGS, parseAiSettings } from '../ai/settings';
 import { normalizeTriggerTags } from '../decks/tags';
 import type { KiokuSettings } from '../review/types';
 
@@ -8,6 +9,7 @@ export const DEFAULT_SETTINGS: KiokuSettings = {
   dayStartHour: 4,
   newPerDay: 20,
   dataFolder: 'Kioku',
+  ai: DEFAULT_AI_SETTINGS,
 };
 
 export const MAX_NEW_PER_DAY = 9999;
@@ -40,6 +42,8 @@ export function parseSettings(raw: unknown): KiokuSettings {
       : Number.isInteger(perDay) && (perDay as number) >= 0 && (perDay as number) <= MAX_NEW_PER_DAY ? perDay as number
         : DEFAULT_SETTINGS.newPerDay,
     dataFolder: folder ?? DEFAULT_SETTINGS.dataFolder,
+    // Parsed and kept, so saving another setting never drops the AI section (keys, consent).
+    ai: parseAiSettings(value.ai),
   };
 }
 

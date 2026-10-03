@@ -1,4 +1,6 @@
 import { Plugin, TFile, type Modal } from 'obsidian';
+import { browserClock, obsidianHttpClient } from './ai/http';
+import { AiRuntime } from './ai/pipeline';
 import { SettingsStore } from './store/settings';
 import { extractFromActiveNote, extractFromFile, hasActiveNote, type ModalTracker } from './ui/extract';
 import { CandidateModal } from './ui/candidate-modal';
@@ -15,7 +17,9 @@ export default class KiokuPlugin extends Plugin {
     const identity = { version: __KIOKU_VERSION__, buildId: __KIOKU_BUILD_ID__ };
     // Settings are read from data.json on first use, never during startup.
     const settings = new SettingsStore(() => this.loadData(), (data) => this.saveData(data));
-    const extract = (): void => extractFromActiveNote(this.app, tracker);
+    // Holds only in-flight slots; no network until a run button is pressed in the candidate popup.
+    const ai = { runtime: new AiRuntime(obsidianHttpClient, browserClock), settings: () => settings.get() };
+    const extract = (): void => extractFromActiveNote(this.app, tracker, ai);
     const openStatus = (): void => {
       this.startupModal ??= new StartupModal(this.app, identity, extract);
       this.startupModal.open();
@@ -52,7 +56,7 @@ export default class KiokuPlugin extends Plugin {
     this.registerEvent(this.app.workspace.on('file-menu', (menu, file) => {
       if (!(file instanceof TFile) || file.extension !== 'md') return;
       menu.addItem((item) => item.setTitle('Kioku：問い・答えの候補を抽出').setIcon('gallery-vertical-end')
-        .onClick(() => { void extractFromFile(this.app, file, tracker); }));
+        .onClick(() => { void extractFromFile(this.app, file, tracker, ai); }));
     }));
     this.addSettingTab(new KiokuSettingTab(this.app, this, settings));
   }

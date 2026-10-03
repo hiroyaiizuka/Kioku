@@ -19,15 +19,15 @@ export class StartupModal extends Modal {
     this.modalEl.addClass('kioku-startup-modal');
     this.setTitle('Kioku — 状態');
     this.contentEl.createEl('p', {
-      text: '開発版：トリガータグ（既定 #kioku）のデッキで、採用したカードを間隔反復の日程で復習できます（左の「フラッシュカード」ボタン）。問い・答えの候補確認・採用も使えます。専用の確認用保管場所での実機確認はまだです。',
+      text: '開発版：トリガータグ（既定 #kioku）のデッキで、採用したカードを間隔反復の日程で復習できます（左の「フラッシュカード」ボタン）。問い・答えの候補確認・採用も使えます。デッキ・復習と AI による候補作成は、テスト専用の保管場所での実機確認がまだです。',
       cls: 'kioku-startup-status',
     });
     this.contentEl.createEl('p', {
-      text: 'AI による候補作成は未実装です。',
+      text: 'AI による候補作成（一部実装）：設定したときだけ動き、候補は人が確認して採用します。生成は OpenAI 互換のサーバー（既定はこのパソコン上。ほかの接続先や名前が cloud で終わるモデルは、外部への送信に同意したときだけ）、判定は外部の判定サービス（設定画面の AI の項目）か判定なしに対応しています。ほかの判定・生成の方式は未実装です。',
       cls: 'kioku-startup-unimplemented',
     });
     this.contentEl.createEl('p', {
-      text: 'この画面を開くだけではノートを読み書きしません。外部送信も行いません。復習の記録は学習データのフォルダ（設定で変更可）にだけ保存し、ノート本文は書き換えません。',
+      text: 'この画面を開くだけではノートを読み書きしません。外部送信も行いません（AI の通信は候補ポップアップで実行ボタンを押したときだけです）。復習の記録は学習データのフォルダ（設定で変更可）にだけ保存し、ノート本文は書き換えません。',
     });
     const build = this.contentEl.createEl('p', { cls: 'kioku-build-identity' });
     build.createSpan({ text: `Kioku ${this.identity.version} · Build ${this.identity.buildId}` });

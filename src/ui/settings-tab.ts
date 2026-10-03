@@ -3,6 +3,7 @@ import { errorMessage } from '../cards/error-message';
 import { normalizeTriggerTags } from '../decks/tags';
 import { MAX_NEW_PER_DAY, normalizeDataFolder, type SettingsStore } from '../store/settings';
 import { checkFolderChange } from '../store/review-store';
+import { renderAiSettings } from './ai-settings';
 
 /** Kioku settings (stored in the plugin's data.json; review data stays in the data folder). */
 export class KiokuSettingTab extends PluginSettingTab {
@@ -120,6 +121,15 @@ export class KiokuSettingTab extends PluginSettingTab {
         folderStatus.setText(`「${next}」に変更しました。`);
       })))
       .descEl.createDiv({ cls: 'kioku-settings-status' });
+
+    renderAiSettings(containerEl, {
+      current: current.ai,
+      save: async (change) => {
+        await this.settings.update({ ai: change((await this.settings.get()).ai) });
+      },
+      redraw: () => this.display(),
+      guarded,
+    });
   }
 }
 

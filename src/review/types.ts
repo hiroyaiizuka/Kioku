@@ -1,4 +1,5 @@
 // Kioku's own review types (Obsidian- and ts-fsrs-independent). See docs/m2-design.md §6.
+import type { AiSettings } from '../ai/settings';
 
 /** `kioku-…` block ID. Case-sensitive, exactly as the M1 parser reads it. */
 export type CardId = string;
@@ -81,4 +82,6 @@ export interface KiokuSettings {
   readonly newPerDay: number | null;
   /** Vault-relative folder without leading / trailing slash. */
   readonly dataFolder: string;
+  /** M3 AI settings (optional in data.json; missing = AI off). */
+  readonly ai: AiSettings;
 }
