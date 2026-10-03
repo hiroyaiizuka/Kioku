@@ -137,10 +137,47 @@ export function renderAiSettings(containerEl: HTMLElement, section: AiSettingsSe
       redraw();
     })));
   new Setting(containerEl)
+    .setName('Jev：モデル名')
+    .setDesc('既定は jev-latest。変更する必要がある場合だけ設定してください。')
+    .addText((text) => {
+      text.setPlaceholder('Jev-latest').setValue(jev.model).onChange(guarded(async (value: string) => {
+        await save(withJev(() => ({ model: value.trim() || 'jev-latest' })));
+      }));
+      text.inputEl.addEventListener('change', redrawAfterSave);
+    });
+  new Setting(containerEl)
     .setName(`外部への送信に同意する（${JEV_HOST}）`)
     .setDesc('候補ごとに、引用と前後の文脈（最大 1,500 字）と問い・答えを送ります。同意するまで送信しません。')
     .addToggle((toggle) => toggle.setValue(hasConsent('jev', ai)).onChange(guarded(async (value: boolean) => {
       await save(withJev((latest) => ({ consent: value ? consentFingerprint('jev', latest) : null })));
       redraw();
     })));
+
+  // ---- timeouts ----
+  new Setting(containerEl)
+    .setName('タイムアウト：生成')
+    .setDesc('生成の最大待ち時間（秒）。既定は 60 秒です。')
+    .addText((text) => {
+      text.setPlaceholder('60').setValue(String(ai.timeouts.generateSeconds)).onChange(guarded(async (value: string) => {
+        const seconds = Number.parseInt(value, 10);
+        if (Number.isFinite(seconds) && seconds > 0) {
+          await save((latest) => ({ ...latest, timeouts: { ...latest.timeouts, generateSeconds: seconds } }));
+        }
+      }));
+      text.inputEl.type = 'number';
+      text.inputEl.min = '1';
+    });
+  new Setting(containerEl)
+    .setName('タイムアウト：判定')
+    .setDesc('判定の最大待ち時間（秒）。既定は 20 秒です。')
+    .addText((text) => {
+      text.setPlaceholder('20').setValue(String(ai.timeouts.judgeSeconds)).onChange(guarded(async (value: string) => {
+        const seconds = Number.parseInt(value, 10);
+        if (Number.isFinite(seconds) && seconds > 0) {
+          await save((latest) => ({ ...latest, timeouts: { ...latest.timeouts, judgeSeconds: seconds } }));
+        }
+      }));
+      text.inputEl.type = 'number';
+      text.inputEl.min = '1';
+    });
 }
