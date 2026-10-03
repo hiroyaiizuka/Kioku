@@ -1,6 +1,7 @@
 import { Notice, PluginSettingTab, Setting, type App, type Plugin } from 'obsidian';
 import { errorMessage } from '../cards/error-message';
 import { normalizeTriggerTags } from '../decks/tags';
+import { type KiokuSettings } from '../review/types';
 import { MAX_NEW_PER_DAY, normalizeDataFolder, type SettingsStore } from '../store/settings';
 import { checkFolderChange } from '../store/review-store';
 import { renderAiSettings } from './ai-settings';
@@ -25,7 +26,7 @@ export class KiokuSettingTab extends PluginSettingTab {
 
   private async render(): Promise<void> {
     const generation = this.generation += 1;
-    let current;
+    let current: KiokuSettings;
     try {
       current = await this.settings.get();
     } catch (error) {
@@ -123,9 +124,13 @@ export class KiokuSettingTab extends PluginSettingTab {
       .descEl.createDiv({ cls: 'kioku-settings-status' });
 
     renderAiSettings(containerEl, {
-      current: current.ai,
+      get current() { 
+        return current.ai;
+      },
       save: async (change) => {
-        await this.settings.update({ ai: change((await this.settings.get()).ai) });
+        const latest = await this.settings.get();
+        await this.settings.update({ ai: change(latest.ai) });
+        current = await this.settings.get();
       },
       redraw: () => this.display(),
       guarded,
