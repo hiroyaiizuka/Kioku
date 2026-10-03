@@ -86,9 +86,40 @@ describe('providers', () => {
     expect(http.requests[0].url).toBe('http://localhost:11434/v1/chat/completions');
     const body = JSON.parse(http.requests[0].body);
     expect(body).toMatchObject({ model: 'qwen3:8b', stream: false, response_format: { type: 'json_schema' } });
+    // Ollama: thinking off (a thinking model otherwise reasons for minutes before the JSON).
+    expect(body.reasoning_effort).toBe('none');
     expect(body.messages[1].content).toContain('本文');
     expect(outcome).toMatchObject({ ok: true, value: { candidates: [CARDS.cards[0]], malformed: 1 } });
+    for (const server of ['llamacpp', 'lmstudio']) {
+      const other = fakeHttp(() => chat({ cards: [] }));
+      await createLocalGenerator({ settings: { ...ai.providers.local, server, baseUrl: 'http://localhost:8080' }, http: other,
+        clock: fakeClock(), gate: new SlotGate(1), timeoutMs: 60000 }).generate({ source: '本文', maxCandidates: 20 }, new AbortController().signal);
+      expect(JSON.parse(other.requests[0].body)).not.toHaveProperty('reasoning_effort');
+    }
     expect(parseGeneration('not json')).toBeNull();
+  });
+
+  it('asks once more without reasoning_effort when the server rejects it (HTTP 400), within the same budget', async () => {
+    const ai = settings();
+    const make = (http) => createLocalGenerator({ settings: ai.providers.local, http, clock: fakeClock(), gate: new SlotGate(1), timeoutMs: 60000 });
+    const rejectsField = fakeHttp((request) => ('reasoning_effort' in JSON.parse(request.body)
+      ? json({ error: { message: 'invalid reasoning value: "none"' } }, 400) : chat({ cards: [CARDS.cards[0]] })));
+    const outcome = await make(rejectsField).generate({ source: '本文', maxCandidates: 20 }, new AbortController().signal);
+    expect(outcome).toMatchObject({ ok: true, value: { candidates: [CARDS.cards[0]] } });
+    expect(rejectsField.requests.map((request) => JSON.parse(request.body).reasoning_effort)).toEqual(['none', undefined]);
+    // A 400 that is not about the field still fails clearly after the one retry (no loop).
+    const always400 = fakeHttp(() => json({ error: 'bad' }, 400));
+    expect(await make(always400).generate({ source: '本文', maxCandidates: 20 }, new AbortController().signal))
+      .toMatchObject({ ok: false, failure: { kind: 'invalid-request', detail: 'HTTP 400' } });
+    expect(always400.requests).toHaveLength(2);
+    // Other failures are not retried, and servers without the field never retry.
+    const notFound = fakeHttp(() => json({ error: 'model not found' }, 404));
+    await make(notFound).generate({ source: '本文', maxCandidates: 20 }, new AbortController().signal);
+    expect(notFound.requests).toHaveLength(1);
+    const llama = fakeHttp(() => json({ error: 'bad' }, 400));
+    await createLocalGenerator({ settings: { ...ai.providers.local, server: 'llamacpp', baseUrl: 'http://localhost:8080' }, http: llama,
+      clock: fakeClock(), gate: new SlotGate(1), timeoutMs: 60000 }).generate({ source: '本文', maxCandidates: 20 }, new AbortController().signal);
+    expect(llama.requests).toHaveLength(1);
     expect(parseGeneration('{"cards":[]}')).toEqual({ candidates: [], malformed: 0 });
   });
 });
