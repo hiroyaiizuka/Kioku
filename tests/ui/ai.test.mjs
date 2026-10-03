@@ -494,7 +494,7 @@ describe('AI settings tab', () => {
     expect(field('タイムアウト：生成')).not.toBeNull();
   });
 
-  it('Jev model name: empty defaults to jev-latest, no focus loss during typing', async () => {
+  it('Jev model name: normalizes to lowercase, empty defaults to jev-latest, no focus loss during typing', async () => {
     const consent = 'jev|api.typesafe.ai|jev-latest';
     const { plugin } = open({ ai: ai({ providers: { local: { model: 'qwen3:8b' }, jev: { apiKey: KEY, consent } } }) });
     await tab(plugin); await flush();
@@ -503,17 +503,17 @@ describe('AI settings tab', () => {
     modelInput.value = 'J';
     modelInput.dispatchEvent(new window.Event('input'));
     await flush();
-    expect(plugin.data.ai.providers.jev.model).toBe('J');
+    expect(plugin.data.ai.providers.jev.model).toBe('j');
 
     modelInput.value = 'Jev';
     modelInput.dispatchEvent(new window.Event('input'));
     await flush();
-    expect(plugin.data.ai.providers.jev.model).toBe('Jev');
+    expect(plugin.data.ai.providers.jev.model).toBe('jev');
 
     modelInput.value = 'Jev-BETA';
     modelInput.dispatchEvent(new window.Event('input'));
     await flush();
-    expect(plugin.data.ai.providers.jev.model).toBe('Jev-BETA');
+    expect(plugin.data.ai.providers.jev.model).toBe('jev-beta');
 
     modelInput.value = '   ';
     modelInput.dispatchEvent(new window.Event('input'));
@@ -584,9 +584,18 @@ describe('AI settings tab', () => {
     const { plugin } = open({ ai: ai({ judge: 'none', timeouts: { generateSeconds: 60, judgeSeconds: 20 } }) });
     await tab(plugin); await flush();
 
+    await typeInto('タイムアウト：生成', '100.5', { blur: true });
+    await flush();
+    expect(plugin.data.ai.timeouts.generateSeconds).toBe(60);
+    expect(field('タイムアウト：生成').querySelector('.kioku-settings-status').textContent).toContain('1〜600 秒の範囲で入力してください');
+    expect(field('タイムアウト：生成').querySelector('input').value).toBe('60');
+
     await typeInto('タイムアウト：生成', '100', { blur: true });
     await flush();
     expect(plugin.data.ai.timeouts.generateSeconds).toBe(100);
+    const generateInputAfterSave = field('タイムアウト：生成').querySelector('input');
+    generateInputAfterSave.focus();
+    expect(document.activeElement).toBe(generateInputAfterSave);
 
     await typeInto('タイムアウト：生成', '600', { blur: true });
     await flush();
@@ -597,6 +606,11 @@ describe('AI settings tab', () => {
     await flush();
     expect(plugin.data.ai.timeouts.generateSeconds).toBe(600);
     expect(field('タイムアウト：生成').querySelector('.kioku-settings-status').textContent).toContain('1〜600 秒の範囲で入力してください');
+    expect(field('タイムアウト：生成').querySelector('input').value).toBe('600');
+
+    await typeInto('タイムアウト：生成', '700', { blur: true });
+    await flush();
+    expect(plugin.data.ai.timeouts.generateSeconds).toBe(600);
     expect(field('タイムアウト：生成').querySelector('input').value).toBe('600');
 
     await typeInto('タイムアウト：生成', '', { blur: true });
@@ -656,9 +670,28 @@ describe('AI settings tab', () => {
     const { plugin } = open({ ai: ai({ timeouts: { generateSeconds: 60, judgeSeconds: 20 } }) });
     await tab(plugin); await flush();
 
+    expect(field('タイムアウト：生成').querySelector('input').max).toBe('600');
+
     await typeInto('タイムアウト：生成', '80', { blur: true });
     await flush();
     expect(plugin.data.ai.timeouts.generateSeconds).toBe(80);
+    const generateInputAfterSave = field('タイムアウト：生成').querySelector('input');
+    generateInputAfterSave.focus();
+    expect(document.activeElement).toBe(generateInputAfterSave);
+
+    const originalSaveData = plugin.saveData.bind(plugin);
+    let saveFailed = false;
+    plugin.saveData = async function (data) {
+      if (!saveFailed) {
+        saveFailed = true;
+        throw new Error('mock save failure');
+      }
+      return originalSaveData(data);
+    };
+    await typeInto('タイムアウト：生成', '85', { blur: true });
+    await flush();
+    expect(plugin.data.ai.timeouts.generateSeconds).toBe(80);
+    expect(field('タイムアウト：生成').querySelector('input').value).toBe('80');
 
     await typeInto('タイムアウト：生成', '700', { blur: true });
     await flush();
@@ -676,6 +709,24 @@ describe('AI settings tab', () => {
     const { plugin } = open({ ai: ai({ timeouts: { generateSeconds: 60, judgeSeconds: 20 } }) });
     await tab(plugin); await flush();
 
+    const judgeInput = field('タイムアウト：判定').querySelector('input');
+    judgeInput.value = '25';
+    judgeInput.dispatchEvent(new window.Event('input'));
+    await flush();
+    expect(plugin.data.ai.timeouts.judgeSeconds).toBe(20);
+
+    judgeInput.dispatchEvent(new window.Event('change'));
+    await flush();
+    expect(plugin.data.ai.timeouts.judgeSeconds).toBe(25);
+    judgeInput.focus();
+    expect(document.activeElement).toBe(judgeInput);
+
+    await typeInto('タイムアウト：判定', '30.5', { blur: true });
+    await flush();
+    expect(plugin.data.ai.timeouts.judgeSeconds).toBe(25);
+    expect(field('タイムアウト：判定').querySelector('.kioku-settings-status').textContent).toContain('1〜600 秒の範囲で入力してください');
+    expect(field('タイムアウト：判定').querySelector('input').value).toBe('25');
+
     await typeInto('タイムアウト：判定', '30', { blur: true });
     await flush();
     expect(plugin.data.ai.timeouts.judgeSeconds).toBe(30);
@@ -685,7 +736,6 @@ describe('AI settings tab', () => {
     expect(plugin.data.ai.timeouts.judgeSeconds).toBe(30);
     expect(field('タイムアウト：判定').querySelector('input').value).toBe('30');
 
-    const judgeInput = field('タイムアウト：判定').querySelector('input');
     let mockValue = '';
     const originalValueDescriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(judgeInput), 'value');
     const originalValidityDescriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(judgeInput), 'validity');

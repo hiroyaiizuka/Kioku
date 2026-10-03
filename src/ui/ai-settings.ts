@@ -212,7 +212,7 @@ export function renderAiSettings(containerEl: HTMLElement, section: AiSettingsSe
     .setDesc('既定は jev-latest（小文字）。変更する必要がある場合だけ設定してください。')
     .addText((text) => {
       text.setPlaceholder(JEV_DEFAULT_MODEL).setValue(jev.model).onChange(guarded(async (value: string) => {
-        await save(withJev(() => ({ model: value.trim() || JEV_DEFAULT_MODEL })));
+        await save(withJev(() => ({ model: value.trim().toLowerCase() || JEV_DEFAULT_MODEL })));
       }));
       text.inputEl.addEventListener('change', redrawAfterSave);
     });
