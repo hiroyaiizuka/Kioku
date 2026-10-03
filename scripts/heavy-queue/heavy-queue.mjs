@@ -3,8 +3,10 @@
 // It never signals any process. An owner is released by itself, or recovered only when its PID has exited or the PID
 // now runs a different command line / start time (PID reuse). Processes are looked up by exact PID (`ps -p <pid>`),
 // never by a name or pattern search that could match the waiter itself. Overdue owners are reported, never touched.
+// Command lines can carry credentials: only a SHA-256 digest of the full command line and a sanitized executable
+// basename are ever persisted, returned, logged or put into errors. The raw command line stays in memory only.
 import { spawn, spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { accessSync, appendFileSync, constants, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync,
   writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -41,7 +43,10 @@ function runPs(args) {
   return result;
 }
 
-/** `{ started, command }` of exactly this PID, or null when it does not exist (ps exit 1). Throws when ps cannot tell. */
+/**
+ * `{ started, command }` of exactly this PID, or null when it does not exist (ps exit 1). Throws when ps cannot tell.
+ * The raw command is for `identify` only and must never be stored, returned to callers or printed.
+ */
 export function processInfo(pid) {
   const query = (field) => {
     const result = runPs(['-ww', '-o', `${field}=`, '-p', String(pid)]);
@@ -52,6 +57,14 @@ export function processInfo(pid) {
   const started = query('lstart');
   const command = started === null ? null : query('command');
   return started === null || command === null ? null : { started, command };
+}
+
+/** Safe identity of a process: start time, digest of the full command line, executable basename (argv[0] only). */
+export function identify(info) {
+  const first = info.command.split(/\s/u, 1)[0] ?? '';
+  const name = first.slice(first.lastIndexOf('/') + 1);
+  return { started: info.started, commandDigest: createHash('sha256').update(info.command).digest('hex'),
+    executable: /^[A-Za-z0-9._+-]{1,64}$/u.test(name) && !name.includes('=') ? name : 'unknown' };
 }
 
 export const defaultSystem = {
@@ -92,10 +105,13 @@ export function openQueue(dir, system = defaultSystem) {
 
 const isText = (value) => typeof value === 'string' && value.length > 0;
 const isTime = (value) => isText(value) && Number.isFinite(Date.parse(value));
+const isIdentity = (record) => typeof record.commandDigest === 'string' && /^[0-9a-f]{64}$/u.test(record.commandDigest)
+  && typeof record.executable === 'string' && /^[A-Za-z0-9._+-]{1,64}$/u.test(record.executable) && typeof record.started === 'string';
 function validRecord(record, kind) {
-  const base = record !== null && typeof record === 'object' && record.schema === 1 && uuidPattern.test(record.ticketId ?? '')
+  const base = record !== null && typeof record === 'object' && record.schema === 2 && uuidPattern.test(record.ticketId ?? '')
     && isText(record.project) && isText(record.worktree) && isAbsolute(record.worktree) && Number.isSafeInteger(record.pid) && record.pid > 1
-    && isText(record.cmdline) && typeof record.started === 'string' && jobs.includes(record.job) && isTime(record.enqueuedAt);
+    && isIdentity(record) && !('cmdline' in record) && jobs.includes(record.job) && isTime(record.enqueuedAt)
+    && (record.launcher === undefined || (Number.isSafeInteger(record.launcher?.pid) && isIdentity(record.launcher)));
   if (!base) return false;
   if (kind === 'lock') return true;
   if (!Number.isSafeInteger(record.seq) || record.seq <= 0) return false;
@@ -163,17 +179,20 @@ export function listTickets(queue) {
   return tickets.sort((a, b) => a.seq - b.seq);
 }
 
-/** Live only while the PID exists with the recorded command line and start time; nothing is ever signalled. */
+/** Live only while the PID exists with the recorded command-line digest and start time; nothing is ever signalled. */
 export function verify(record, system) {
   const info = system.processInfo(record.pid);
   if (!info) return { live: false, reason: `pid ${record.pid} has exited` };
-  if (info.command !== record.cmdline) return { live: false, reason: `pid ${record.pid} was reused by another command (${info.command})` };
-  if (record.started && info.started !== record.started) return { live: false, reason: `pid ${record.pid} was reused (start time differs)` };
+  const now = identify(info);
+  if (now.commandDigest !== record.commandDigest) {
+    return { live: false, reason: `pid ${record.pid} was reused by another command (executable ${now.executable})` };
+  }
+  if (now.started !== record.started) return { live: false, reason: `pid ${record.pid} was reused (start time differs)` };
   return { live: true };
 }
 
 export const summary = (record) => ({ ticketId: record.ticketId, project: record.project, worktree: record.worktree, pid: record.pid,
-  cmdline: record.cmdline, job: record.job, seq: record.seq, enqueuedAt: record.enqueuedAt, ...(record.startedAt ? { startedAt: record.startedAt } : {}),
+  executable: record.executable, commandDigest: record.commandDigest, started: record.started, job: record.job, seq: record.seq, enqueuedAt: record.enqueuedAt, ...(record.startedAt ? { startedAt: record.startedAt } : {}),
   ...(record.waitedMs !== undefined ? { waitedMs: record.waitedMs } : {}), ...(record.launcher ? { launcher: record.launcher } : {}) });
 
 /**
@@ -217,7 +236,7 @@ function sameWorktreeRefusal(owner) {
     return `This worktree already holds the native slot (dedicated instance pid ${owner.pid}, since ${owner.startedAt}). `
       + 'Use it, or quit it first (harness:quit).';
   }
-  return `This worktree already holds the heavy-job slot (${owner.job}, pid ${owner.pid}: ${owner.cmdline}, since ${owner.startedAt}); `
+  return `This worktree already holds the heavy-job slot (${owner.job}, pid ${owner.pid} [${owner.executable}], since ${owner.startedAt}); `
     + 'refusing a second request instead of waiting on itself. Wait for it to finish (it is never stopped automatically).';
 }
 
@@ -245,14 +264,14 @@ export async function acquire(queue, request, options = {}) {
   }
   for (const ticket of listTickets(queue)) {
     if (ticket.worktree === worktree && verify(ticket, system).live) {
-      refuse(`This worktree already waits in the heavy-job queue (ticket ${ticket.seq}, pid ${ticket.pid}: ${ticket.cmdline}); `
+      refuse(`This worktree already waits in the heavy-job queue (ticket ${ticket.seq}, pid ${ticket.pid} [${ticket.executable}]); `
         + 'refusing a second request. Wait for it, or stop that command yourself.');
     }
   }
   const me = system.processInfo(system.pid);
   if (!me) refuse(`Cannot read this process (pid ${system.pid}) with ps; refusing to enqueue.`);
   const ticketId = randomUUID();
-  const base = { schema: 1, ticketId, project, worktree, pid: system.pid, cmdline: me.command, started: me.started, job,
+  const base = { schema: 2, ticketId, project, worktree, pid: system.pid, ...identify(me), job,
     enqueuedAt: new Date(system.now()).toISOString() };
   const { seq, file } = await enqueue(queue, base);
   base.seq = seq;
@@ -298,7 +317,7 @@ export async function acquire(queue, request, options = {}) {
       if (owner && ownerState.live && heldMs(owner, system) > overdueMs && !overdue.has(owner.ticketId)) {
         overdue.add(owner.ticketId);
         system.log(`[heavy-queue] REPORT: the owner has held the slot over ${formatDuration(overdueMs)} (${describe(owner, system)}). `
-          + 'Report only: nothing is signalled or released while that pid is alive with the same command line.');
+          + 'Report only: nothing is signalled or released while that pid is alive with the same command-line digest.');
         history(queue, { event: 'overdue', heldMs: heldMs(owner, system), record: summary(owner) });
       }
       await system.sleep(pollMs);
@@ -320,7 +339,7 @@ function readLastSeq(queue) {
 }
 
 /**
- * Append a ticket under a short exclusive enqueue lock (holding our pid / command line), so sequence numbers are
+ * Append a ticket under a short exclusive enqueue lock (holding our pid / command-line digest), so sequence numbers are
  * unique and strictly increasing in enqueue order. The high-water mark in seq.json keeps numbers from being reused
  * after tickets leave. A lock left by a dead (or reused) PID is recovered like a stale owner; a live one is waited for.
  */
@@ -357,7 +376,8 @@ export function handOff(queue, ticketId, pid) {
   if (!owner || owner.ticketId !== ticketId) refuse(`The slot ${ticketId} is no longer held; cannot hand it to pid ${pid}.`);
   const info = queue.system.processInfo(pid);
   if (!info) refuse(`Cannot hand the slot to pid ${pid}: it does not exist.`);
-  const record = { ...owner, pid, cmdline: info.command, started: info.started, launcher: { pid: owner.pid, cmdline: owner.cmdline } };
+  const record = { ...owner, pid, ...identify(info),
+    launcher: { pid: owner.pid, executable: owner.executable, commandDigest: owner.commandDigest, started: owner.started } };
   replaceAtomic(queue, queue.paths.owner, record);
   history(queue, { event: 'handed-off', record: summary(record) });
   return record;
@@ -389,7 +409,9 @@ export async function run(queue, request, command, args, options = {}) {
   try {
     const child = (options.spawn ?? spawn)(command, args, { stdio: 'inherit', env: { ...request.env, [tokenVariable]: held.owner.token } });
     return await new Promise((resolve) => {
-      child.once('error', (error) => { queue.system.log(`[heavy-queue] could not start ${command}: ${error.message}`); resolve(1); });
+      child.once('error', (error) => {
+        queue.system.log(`[heavy-queue] could not start the command (${error.code ?? 'error'}); arguments are not shown.`); resolve(1);
+      });
       child.once('exit', (code, signal) => resolve(code ?? (signal ? 1 : 0)));
     });
   } finally {

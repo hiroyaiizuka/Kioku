@@ -1,12 +1,12 @@
 // Mac-wide heavy-job queue with an injected clock and process table. Never starts Obsidian and never signals a process;
 // only the FIFO and check-entry cases start short real child processes against a private temporary queue directory.
 import { spawn, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { acquire, defaultQueueDir, defaultSystem, formatDuration, HeavyQueueError, listTickets, openQueue, overdueMs, readOwner, release,
+import { acquire, defaultQueueDir, defaultSystem, formatDuration, HeavyQueueError, identify, listTickets, openQueue, overdueMs, readOwner, release,
   run, status, tokenVariable } from '../../scripts/heavy-queue/heavy-queue.mjs';
 import { assertNativeHeld, heavyQueueEnabled, launchWithQueue, quitWithQueue } from '../../scripts/lib/heavy-queue.mjs';
 import { prepareVault } from '../../scripts/lib/harness.mjs';
@@ -146,6 +146,80 @@ describe('FIFO order', () => {
   }, 600000);
 });
 
+describe('command lines may carry credentials: only digest + executable basename leave memory', () => {
+  const secret = 'FAKE-SECRET';
+  /** Every byte under the queue directory (owner, tickets, history, counter, stale, tmp). */
+  const queueBytes = (dir) => {
+    const out = [];
+    const walk = (path) => {
+      for (const name of readdirSync(path)) {
+        const file = join(path, name);
+        if (statSync(file).isDirectory()) walk(file); else out.push(`${file}\n${readFileSync(file, 'utf8')}`);
+      }
+    };
+    walk(dir);
+    return out.join('\n');
+  };
+
+  it('a real owner, waiter, status call and refusals never persist or print a secret-looking argument', async () => {
+    const dir = join(scratch(), 'queue'); const finish = join(scratch(), 'finish'); const started = join(scratch(), 'started');
+    const wa = scratch(); const wb = scratch();
+    const env = { ...process.env, ORCA_HEAVY_QUEUE_DIR: dir }; delete env[tokenVariable];
+    const hold = `const fs=process.getBuiltinModule('node:fs');fs.writeFileSync(${JSON.stringify(started)},'');`
+      + `const t=setInterval(()=>{if(fs.existsSync(${JSON.stringify(finish)}))clearInterval(t);},10)`;
+    const start = (cwd, script, flag) => {
+      const child = spawn(process.execPath, [cli, 'run', '--project', 'pilot', '--job', 'check', '--', process.execPath, '-e', script, '--', flag],
+        { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+      let output = ''; child.stdout.on('data', (chunk) => { output += chunk; }); child.stderr.on('data', (chunk) => { output += chunk; });
+      return new Promise((resolve) => { child.on('exit', (code) => resolve({ code, output })); });
+    };
+    const once = (cwd, args) => { const result = spawnSync(process.execPath, [cli, ...args], { cwd, env, encoding: 'utf8' });
+      return { code: result.status, output: result.stdout + result.stderr }; };
+    const a = start(wa, hold, `--api-key=${secret}-123`);
+    await waitUntil(() => existsSync(started), 'the owner to start');
+    const b = start(wb, '0', `--api-key=${secret}-456`);
+    await waitUntil(() => readdirSync(join(dir, 'tickets')).length === 1, 'the waiter to queue');
+    const shown = once(wa, ['status']);
+    const sameWorktree = once(wa, ['run', '--project', 'pilot', '--job', 'check', '--', process.execPath, '-e', '0', '--', `--api-key=${secret}-789`]);
+    const doubleWait = once(wb, ['run', '--project', 'pilot', '--job', 'check', '--', process.execPath, '-e', '0', '--', `--token=${secret}-000`]);
+    const whileHeld = queueBytes(dir);
+    writeFileSync(finish, '');
+    const results = await Promise.all([a, b]);
+
+    expect(shown.code).toBe(0);
+    const snapshot = JSON.parse(shown.output);
+    expect(snapshot.owner).toMatchObject({ executable: 'node', commandDigest: expect.stringMatching(/^[0-9a-f]{64}$/u) });
+    expect(snapshot.waiting).toHaveLength(1);
+    expect(sameWorktree.code).toBe(1); expect(sameWorktree.output).toMatch(/already holds the heavy-job slot \(check, pid \d+ \[node\]/u);
+    expect(doubleWait.code).toBe(1); expect(doubleWait.output).toMatch(/already waits in the heavy-job queue \(ticket \d+, pid \d+ \[node\]\)/u);
+    for (const text of [whileHeld, queueBytes(dir), shown.output, sameWorktree.output, doubleWait.output, ...results.map((result) => result.output)]) {
+      expect(text).not.toContain(secret);
+      expect(text).not.toContain('--api-key');
+    }
+    expect(results.map((result) => result.code)).toEqual([0, 0]);
+  }, realProcessTimeout);
+
+  it('reuse reasons, Kioku launch/quit/smoke results and the identity never echo arguments', async () => {
+    const host = fakeHost(); const dir = scratch(); const env = { ORCA_HEAVY_QUEUE_DIR: dir };
+    expect(identify({ command: `/usr/local/bin/node tool.mjs --api-key=${secret}`, started: 's' }))
+      .toEqual({ started: 's', executable: 'node', commandDigest: expect.stringMatching(/^[0-9a-f]{64}$/u) });
+    expect(identify({ command: `API_KEY=${secret} run`, started: 's' }).executable).toBe('unknown');
+    const launched = await launchWithQueue('/w/kioku', env, async () => {
+      host.table.set(4244, { command: `Obsidian --user-data-dir=/p --api-key=${secret}`, started: 'x' }); return { pid: 4244 };
+    }, host.proc(1601, `node launch --password=${secret}`));
+    host.table.set(4244, { command: `/bin/sh -c sleep --api-key=${secret}`, started: 'x' }); // PID reuse.
+    const shown = status(openQueue(dir, host.proc(1602)));
+    const quit = await quitWithQueue('/w/kioku', env, async () => ({ status: 'STOPPED', pid: 4244 }), host.proc(1603));
+    let refused = '';
+    try { assertNativeHeld('/w/kioku', env, host.proc(1604)); } catch (error) { refused = error.message; }
+    expect(shown.owner.reason).toBe('pid 4244 was reused by another command (executable sh)');
+    for (const text of [JSON.stringify(launched), JSON.stringify(shown), JSON.stringify(quit), refused, host.logs.join('\n'),
+      readFileSync(join(dir, 'history.jsonl'), 'utf8')]) {
+      expect(text).not.toContain(secret);
+    }
+  });
+});
+
 describe('stale owners and tickets', () => {
   it('recovers the slot of a crashed owner (PID gone) and records why', async () => {
     const host = fakeHost(); const dir = scratch();
@@ -174,8 +248,8 @@ describe('stale owners and tickets', () => {
 
   it('recovers an enqueue lock left by a dead PID but waits for a live one', async () => {
     const host = fakeHost(); const dir = scratch();
-    const lockRecord = (pid) => JSON.stringify({ schema: 1, ticketId: '00000000-0000-4000-8000-000000000000', project: 'kioku',
-      worktree: '/w/crashed', pid, cmdline: `node requester-${pid}`, started: 'Sat Oct  3 00:00:00 2026', job: 'check',
+    const lockRecord = (pid) => JSON.stringify({ schema: 2, ticketId: '00000000-0000-4000-8000-000000000000', project: 'kioku',
+      worktree: '/w/crashed', pid, ...identify({ command: `node requester-${pid}`, started: 'Sat Oct  3 00:00:00 2026' }), job: 'check',
       enqueuedAt: '2026-10-03T00:00:00.000Z' });
     openQueue(dir, host.proc(251));
     writeFileSync(join(dir, 'enqueue.lock'), lockRecord(250)); // pid 250 is not in the table: dead.
@@ -485,7 +559,8 @@ describe('Kioku wiring (opt-in)', () => {
       return { status: 'LAUNCHED', pid: 4242 };
     }, host.proc(1401, 'node scripts/obsidian-instance-cli.mjs launch'));
     expect(launched.heavyQueue).toMatchObject({ slot: 'native', waitedMs: 0, owner: { pid: 4242, job: 'native',
-      launcher: { pid: 1401, cmdline: 'node scripts/obsidian-instance-cli.mjs launch' } } });
+      launcher: { pid: 1401, executable: 'node', ...identify({ command: 'node scripts/obsidian-instance-cli.mjs launch', started: 'x' }),
+        started: 'Sat Oct  3 00:00:00 2026' } } });
     host.table.delete(1401); // The launch CLI exits; the slot stays with the dedicated instance.
     let otherDone = false;
     const otherWait = acquire(openQueue(dir, host.proc(1402)), request('/w/mappy')).then(() => { otherDone = true; });
