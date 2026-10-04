@@ -325,6 +325,154 @@ describe('keyboard safety', () => {
   });
 });
 
+describe('gear menu', () => {
+  const OPEN_NOTE = '元のノートを開く';
+  const BACK = 'デッキに戻る';
+  const gear = () => document.querySelector('.kioku-review-gear-button');
+  const menuItems = () => [...document.querySelectorAll('.kioku-review-menu-item')];
+  const menuItem = (text) => menuItems().find((item) => item.textContent === text);
+  const openedLinks = (app) => app.calls.filter((call) => call.startsWith('workspace.openLinkText:'));
+  const ACTIVATE = {
+    click: (element) => element.click(),
+    Enter: (element) => { element.focus(); key('Enter', {}, element); },
+    Space: (element) => { element.focus(); key(' ', {}, element); },
+  };
+
+  /**
+   * Opens the first card (both / kioku-dddddddddd) and drives it to `state`. For `saving` the history
+   * append waits on `finish()`; for `failed` it throws until `finish()`. Either way `attempted` is the
+   * event the first save tried to write, so a later write can be compared with it.
+   */
+  async function reach(state) {
+    const vault = setup();
+    const result = { ...vault, attempted: null, finish: () => {} };
+    if (state === 'saving') {
+      let release;
+      const gate = new Promise((resolve) => { release = resolve; });
+      const append = vault.adapter.append.bind(vault.adapter);
+      vault.adapter.append = async (path, data) => {
+        if (path === H) { result.attempted ??= JSON.parse(data); await gate; }
+        return append(path, data);
+      };
+      result.finish = release;
+    }
+    if (state === 'failed') {
+      let fail = true;
+      vault.adapter.hooks.append = (path, data) => {
+        if (path === H && fail) { result.attempted = JSON.parse(data); throw new Error('EIO'); }
+      };
+      result.finish = () => { fail = false; };
+    }
+    await startDeck(vault.plugin);
+    if (state !== 'question') key(' ');
+    if (state === 'saving' || state === 'failed') { key('3'); await settle(); }
+    expect(phase()).toBe(state);
+    return result;
+  }
+
+  for (const state of ['saving', 'failed']) {
+    for (const [how, activate] of Object.entries(ACTIVATE)) {
+      for (const label of [OPEN_NOTE, BACK]) {
+        it(`${state}: ${label} by ${how} does not leave, and the unsaved rating is still saved once`, async () => {
+          const { app, adapter, attempted, finish } = await reach(state);
+          gear().click();
+          const item = menuItem(label);
+          expect(item.disabled).toBe(true);
+          activate(item);
+          await settle();
+          expect(picker()).not.toBeNull();
+          expect(phase()).toBe(state);
+          expect(document.querySelector('.kioku-deck-list')).toBeNull();
+          expect(openedLinks(app)).toEqual([]);
+          expect(historyLines(adapter)).toEqual([]);
+          finish();
+          if (state === 'failed') document.querySelector('.kioku-review-retry').click();
+          await settle();
+          expect(historyLines(adapter)).toEqual([attempted]);
+          expect(attempted).toMatchObject({ cardId: 'kioku-dddddddddd', grade: 3 });
+          expect(phase()).toBe('question');
+          expect(question()).toBe('心拍数は？');
+        });
+      }
+    }
+  }
+
+  for (const state of ['question', 'answer']) {
+    for (const [how, activate] of Object.entries(ACTIVATE)) {
+      it(`${state}: ${OPEN_NOTE} by ${how} closes the modal and opens the card's note, writing nothing`, async () => {
+        const { app, adapter } = await reach(state);
+        gear().click();
+        activate(menuItem(OPEN_NOTE));
+        await settle();
+        expect(picker()).toBeNull();
+        expect(openedLinks(app)).toEqual(['workspace.openLinkText:学習/両方.md#^kioku-dddddddddd||false']);
+        expect(adapter.writes()).toEqual([]);
+      });
+
+      it(`${state}: ${BACK} by ${how} returns to the deck list, writing nothing`, async () => {
+        const { app, adapter } = await reach(state);
+        gear().click();
+        activate(menuItem(BACK));
+        await settle();
+        expect(picker()).not.toBeNull();
+        expect(document.querySelector('.kioku-review')).toBeNull();
+        expect(rows()[0]).toBe('全デッキ | Due 0 · New 4 · Total 4');
+        expect(openedLinks(app)).toEqual([]);
+        expect(adapter.writes()).toEqual([]);
+      });
+    }
+  }
+
+  for (const how of ['Enter', 'Space']) {
+    it(`${how} on the focused gear opens the menu (not the answer) and moves focus to its first item`, async () => {
+      await reach('question');
+      ACTIVATE[how](gear());
+      expect(phase()).toBe('question');
+      expect(menuItems().map((item) => item.textContent)).toEqual([OPEN_NOTE, BACK]);
+      expect(document.activeElement).toBe(menuItem(OPEN_NOTE));
+      ACTIVATE[how](gear());
+      expect(menuItems()).toEqual([]);
+      expect(document.activeElement).toBe(gear());
+      expect(phase()).toBe('question');
+    });
+  }
+
+  it('Tab reaches the menu items right after the gear (focusable buttons in order)', async () => {
+    await reach('answer');
+    gear().click();
+    const focusable = [...document.querySelectorAll('.kioku-review button')].filter((button) => !button.disabled && button.tabIndex >= 0);
+    const at = focusable.indexOf(gear());
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(focusable.slice(at + 1, at + 3)).toEqual([menuItem(OPEN_NOTE), menuItem(BACK)]);
+  });
+
+  for (const state of ['question', 'answer', 'saving', 'failed']) {
+    it(`${state}: Escape with the menu open closes only the menu and returns focus to the gear`, async () => {
+      const { adapter, attempted, finish } = await reach(state);
+      gear().click();
+      const from = menuItem(BACK).disabled ? gear() : menuItem(BACK);
+      from.focus();
+      const event = key('Escape', {}, from);
+      expect(event.defaultPrevented).toBe(true);
+      expect(picker()).not.toBeNull();
+      expect(phase()).toBe(state);
+      expect(menuItems()).toEqual([]);
+      expect(document.activeElement).toBe(gear());
+      // With the menu closed, Escape closes the modal as before.
+      if (state === 'question' || state === 'answer') {
+        key('Escape', {}, gear());
+        expect(picker()).toBeNull();
+        expect(adapter.writes()).toEqual([]);
+        return;
+      }
+      finish();
+      if (state === 'failed') document.querySelector('.kioku-review-retry').click();
+      await settle();
+      expect(historyLines(adapter)).toEqual([attempted]);
+    });
+  }
+});
+
 describe('new-card limit', () => {
   it('stops at the daily limit, shows 残りは明日以降, and 今日だけ あと10枚 continues the same deck', async () => {
     const { adapter, plugin } = setup({ settings: { newPerDay: 2 } });
