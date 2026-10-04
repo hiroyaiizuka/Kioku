@@ -219,7 +219,10 @@ export class ReviewScreen {
     const headerRight = headerRow.createDiv({ cls: 'kioku-review-header-right' });
     const gearWrapper = headerRight.createDiv({ cls: 'kioku-review-gear-wrapper' });
     gearWrapper.addEventListener('click', (evt) => evt.stopPropagation());
-    const gearButton = gearWrapper.createEl('button', { cls: 'kioku-review-gear-button', text: '⚙', attr: { 'aria-label': 'メニュー' } });
+    const gearButton = gearWrapper.createEl('button', { cls: 'kioku-review-gear-button', text: '⚙' });
+    if (!this.menuOpen) {
+      gearButton.setAttribute('aria-label', 'メニュー');
+    }
     gearButton.addEventListener('click', () => {
       this.menuOpen = !this.menuOpen;
       this.render();
@@ -266,7 +269,9 @@ export class ReviewScreen {
     }
     const actions = screen.createDiv({ cls: 'kioku-review-actions' });
     let focus: HTMLButtonElement | null = null;
+    const busy = this.phase === 'saving' || this.phase === 'failed';
     if (this.phase === 'question') {
+      this.button(actions, 'スキップ（S）', 'kioku-review-skip', () => this.skip(), busy);
       focus = this.button(actions, '答えを表示（Space）', 'mod-cta kioku-review-reveal', () => this.reveal());
     } else {
       const intervals = previewIntervals(this.ctx.store.state.cards[card.id] ?? null, this.ctx.today);
@@ -279,9 +284,8 @@ export class ReviewScreen {
         button.setAttribute('aria-label', `${GRADE_LABEL[grade]}（キー ${grade}）：次回 ${label}後`);
         if (grade === 3 && !disabled) focus = button;
       }
+      this.button(actions, 'スキップ（S）', 'kioku-review-skip', () => this.skip(), busy);
     }
-    const busy = this.phase === 'saving' || this.phase === 'failed';
-    this.button(actions, 'スキップ（S）', 'kioku-review-skip', () => this.skip(), busy);
     const message = screen.createDiv({ cls: 'kioku-review-message' });
     if (this.phase === 'saving') message.setText('保存しています…');
     if (this.phase === 'failed') {
