@@ -50,6 +50,7 @@ export class ReviewScreen {
   private failure = '';
   private closed = false;
   private warnedState = false;
+  private menuOpen = false;
 
   constructor(private readonly ctx: ReviewContext) {
     this.queue = new ReviewQueue(ctx.cards, (id) => ctx.store.state.cards[id], ctx.today);
@@ -212,9 +213,43 @@ export class ReviewScreen {
     screen.dataset.kiokuPhase = this.phase;
     // Keeps keyboard focus inside the modal when no button can take it (e.g. while saving).
     screen.tabIndex = -1;
-    const header = screen.createDiv({ cls: 'kioku-review-header' });
-    header.createSpan({ cls: 'kioku-review-deck', text: this.ctx.deckLabel });
-    header.createSpan({ cls: 'kioku-review-remaining',
+    const headerRow = screen.createDiv({ cls: 'kioku-review-header-row' });
+    const headerLeft = headerRow.createDiv({ cls: 'kioku-review-header-left' });
+    headerLeft.createSpan({ cls: 'kioku-review-deck', text: this.ctx.deckLabel });
+    const headerRight = headerRow.createDiv({ cls: 'kioku-review-header-right' });
+    const gearWrapper = headerRight.createDiv({ cls: 'kioku-review-gear-wrapper' });
+    gearWrapper.addEventListener('click', (evt) => evt.stopPropagation());
+    const gearButton = gearWrapper.createEl('button', { cls: 'kioku-review-gear-button', text: '⚙' });
+    if (!this.menuOpen) {
+      gearButton.setAttribute('aria-label', 'メニュー');
+    }
+    gearButton.addEventListener('click', () => {
+      this.menuOpen = !this.menuOpen;
+      this.render();
+    });
+    screen.addEventListener('click', () => {
+      if (this.menuOpen) {
+        this.menuOpen = false;
+        this.render();
+      }
+    });
+    if (this.menuOpen && this.current) {
+      const card = this.current;
+      const menu = gearWrapper.createDiv({ cls: 'kioku-review-gear-menu' });
+      const openNote = menu.createDiv({ cls: 'kioku-review-menu-item' });
+      openNote.setText('元のノートを開く');
+      openNote.addEventListener('click', () => {
+        this.menuOpen = false;
+        this.ctx.openNote(card);
+      });
+      const backToPicker = menu.createDiv({ cls: 'kioku-review-menu-item' });
+      backToPicker.setText('デッキに戻る');
+      backToPicker.addEventListener('click', () => {
+        this.menuOpen = false;
+        this.ctx.backToPicker();
+      });
+    }
+    headerRight.createSpan({ cls: 'kioku-review-remaining',
       text: `残り ${this.queue.remaining(this.allowance())} 枚` });
     if (this.ctx.store.readOnly) {
       screen.createDiv({ cls: 'kioku-review-readonly', text: '読み取り専用：評価は保存できません（スキップと閲覧だけできます）。' });
@@ -234,7 +269,9 @@ export class ReviewScreen {
     }
     const actions = screen.createDiv({ cls: 'kioku-review-actions' });
     let focus: HTMLButtonElement | null = null;
+    const busy = this.phase === 'saving' || this.phase === 'failed';
     if (this.phase === 'question') {
+      this.button(actions, 'スキップ（S）', 'kioku-review-skip', () => this.skip(), busy);
       focus = this.button(actions, '答えを表示（Space）', 'mod-cta kioku-review-reveal', () => this.reveal());
     } else {
       const intervals = previewIntervals(this.ctx.store.state.cards[card.id] ?? null, this.ctx.today);
@@ -247,19 +284,14 @@ export class ReviewScreen {
         button.setAttribute('aria-label', `${GRADE_LABEL[grade]}（キー ${grade}）：次回 ${label}後`);
         if (grade === 3 && !disabled) focus = button;
       }
+      this.button(actions, 'スキップ（S）', 'kioku-review-skip', () => this.skip(), busy);
     }
-    const busy = this.phase === 'saving' || this.phase === 'failed';
-    this.button(actions, 'スキップ（S）', 'kioku-review-skip', () => this.skip(), busy);
     const message = screen.createDiv({ cls: 'kioku-review-message' });
     if (this.phase === 'saving') message.setText('保存しています…');
     if (this.phase === 'failed') {
       message.setText(this.failure);
       focus = this.button(actions, 'もう一度保存する', 'mod-cta kioku-review-retry', () => void this.save());
     }
-    const footer = screen.createDiv({ cls: 'kioku-review-footer' });
-    // After a failed save only "もう一度保存する" (same event) or closing remains: leaving silently could lose it.
-    this.button(footer, 'ノートを開く', 'kioku-review-open', () => this.ctx.openNote(card), busy);
-    this.button(footer, 'デッキ選択に戻る', 'kioku-review-back', () => this.ctx.backToPicker(), busy);
     (focus ?? screen).focus();
   }
 

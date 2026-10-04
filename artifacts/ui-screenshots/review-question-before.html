@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Kioku Review Question - Before</title>
+  <style>
+    /* Obsidian-like theme */
+    :root {
+      --background-modifier-border: #ddd;
+      --text-muted: #666;
+      --text-warning: #d97706;
+      --text-error: #dc2626;
+      --background-secondary: #f5f5f5;
+      --background-modifier-error: #fee2e2;
+      --radius-m: 8px;
+      --radius-s: 4px;
+      --font-ui-small: 13px;
+      --font-ui-medium: 16px;
+      --font-semibold: 600;
+      --size-2-2: 8px;
+      --size-2-3: 12px;
+      --size-4-2: 16px;
+      --size-4-3: 24px;
+      --size-4-4: 32px;
+    }
+    body {
+      margin: 0;
+      padding: 40px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: #fafafa;
+    }
+    .modal-container {
+      position: relative;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+    }
+    section {
+      background: white;
+      border: 1px solid var(--background-modifier-border);
+      border-radius: var(--radius-m);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      padding: 24px;
+      width: min(48rem, 92vw);
+    }
+    h2 {
+      margin: 0 0 16px 0;
+      font-size: 20px;
+      font-weight: 600;
+    }
+    .mod-cta {
+      background: #6366f1;
+      color: white;
+      border: none;
+      border-radius: var(--radius-s);
+      padding: 8px 16px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    button {
+      background: white;
+      border: 1px solid var(--background-modifier-border);
+      border-radius: var(--radius-s);
+      padding: 8px 16px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    .kioku-review-header {
+      display: flex;
+      justify-content: space-between;
+      color: var(--text-muted);
+      font-size: var(--font-ui-small);
+      margin-bottom: var(--size-4-2);
+    }
+    .kioku-review-question {
+      max-height: 30vh;
+      overflow-y: auto;
+      overflow-wrap: anywhere;
+      padding: var(--size-4-2) 0;
+      font-size: 16px;
+      line-height: 1.6;
+    }
+    .kioku-review-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--size-4-2);
+      justify-content: flex-end;
+      margin-top: var(--size-4-3);
+    }
+    .kioku-review-footer {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--size-4-2);
+      justify-content: flex-end;
+      margin-top: var(--size-4-3);
+    }
+  </style>
+</head>
+<body>
+  <div class="modal-container">
+    <section class="kioku-deck-picker-modal">
+      <h2>Kioku — 生物学</h2>
+      
+      <div class="kioku-review-header">
+        <span>生物学</span>
+        <span>残り 8 枚</span>
+      </div>
+      
+      <div class="kioku-review-question">
+        <p>光合成とは？</p>
+      </div>
+      
+      <div class="kioku-review-actions">
+        <button class="mod-cta">答えを表示（Space）</button>
+        <button>スキップ（S）</button>
+      </div>
+      
+      <div class="kioku-review-footer">
+        <button>ノートを開く</button>
+        <button>デッキ選択に戻る</button>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

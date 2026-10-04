@@ -1,4 +1,69 @@
-.kioku-startup-modal {
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Kioku Candidate Modal - 残す</title>
+  <style>
+    /* Obsidian-like theme */
+    :root {
+      --background-modifier-border: #ddd;
+      --text-muted: #666;
+      --text-warning: #d97706;
+      --text-error: #dc2626;
+      --background-secondary: #f5f5f5;
+      --background-modifier-error: #fee2e2;
+      --radius-m: 8px;
+      --radius-s: 4px;
+      --font-ui-small: 13px;
+      --font-ui-medium: 16px;
+      --font-semibold: 600;
+      --size-2-2: 8px;
+      --size-2-3: 12px;
+      --size-4-2: 16px;
+      --size-4-3: 24px;
+      --size-4-4: 32px;
+    }
+    body {
+      margin: 0;
+      padding: 40px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: #fafafa;
+    }
+    .modal-container {
+      position: relative;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+    }
+    section {
+      background: white;
+      border: 1px solid var(--background-modifier-border);
+      border-radius: var(--radius-m);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      padding: 24px;
+    }
+    h2 {
+      margin: 0 0 16px 0;
+      font-size: 20px;
+      font-weight: 600;
+    }
+    .mod-cta {
+      background: #5b21b6;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    button {
+      padding: 8px 16px;
+      border: 1px solid var(--background-modifier-border);
+      background: white;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .kioku-startup-modal {
   width: min(32rem, 90vw);
 }
 
@@ -156,83 +221,11 @@
   outline: none;
 }
 
-.kioku-deck-picker-modal .kioku-review-header-row {
+.kioku-deck-picker-modal .kioku-review-header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: var(--size-4-2);
-}
-
-.kioku-deck-picker-modal .kioku-review-header-left {
   color: var(--text-muted);
   font-size: var(--font-ui-small);
-}
-
-.kioku-deck-picker-modal .kioku-review-header-right {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: var(--size-2-2);
-  color: var(--text-muted);
-  font-size: var(--font-ui-small);
-}
-
-.kioku-deck-picker-modal .kioku-review-gear-wrapper {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-}
-
-.kioku-deck-picker-modal .kioku-review-gear-button {
-  background: transparent;
-  border: none;
-  padding: var(--size-2-2);
-  cursor: pointer;
-  color: var(--text-muted);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-s);
-}
-
-.kioku-deck-picker-modal .kioku-review-gear-button:hover {
-  background: var(--background-modifier-hover);
-}
-
-.kioku-deck-picker-modal .kioku-review-gear-menu {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  margin-top: var(--size-2-2);
-  background: var(--background-primary);
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--radius-m);
-  box-shadow: var(--shadow-s);
-  min-width: 180px;
-  z-index: 10;
-}
-
-.kioku-deck-picker-modal .kioku-review-menu-item {
-  padding: var(--size-2-3) var(--size-4-2);
-  cursor: pointer;
-  font-size: var(--font-ui-small);
-}
-
-.kioku-deck-picker-modal .kioku-review-menu-item:hover {
-  background: var(--background-modifier-hover);
-}
-
-.kioku-deck-picker-modal .kioku-review-menu-item:first-child {
-  border-radius: var(--radius-m) var(--radius-m) 0 0;
-}
-
-.kioku-deck-picker-modal .kioku-review-menu-item:last-child {
-  border-radius: 0 0 var(--radius-m) var(--radius-m);
-}
-
-.kioku-deck-picker-modal .kioku-review-menu-item:only-child {
-  border-radius: var(--radius-m);
 }
 
 .kioku-deck-picker-modal .kioku-review-question,
@@ -286,3 +279,60 @@
   color: var(--text-muted);
   font-size: var(--font-ui-small);
 }
+
+  </style>
+</head>
+<body>
+  <div class="modal-container">
+    <section class="kioku-candidate-modal">
+      <h2>問い・答えの候補 — 生物</h2>
+      
+      <div class="kioku-candidate-list">
+        <!-- Card 1 -->
+        <div class="kioku-candidate">
+          <div class="kioku-candidate-meta">3 行目 · 未採用</div>
+          <div class="kioku-candidate-label">原文</div>
+          <pre class="kioku-candidate-source">Q: 光合成とは？
+A: 光で糖を作る反応</pre>
+          <label class="kioku-candidate-field">
+            <span>問い（編集可能）</span>
+            <textarea class="kioku-candidate-question" rows="2">光合成とは？</textarea>
+          </label>
+          <label class="kioku-candidate-field">
+            <span>答え（編集可能）</span>
+            <textarea class="kioku-candidate-answer" rows="2">光で糖を作る反応</textarea>
+          </label>
+          <div class="kioku-candidate-actions">
+            <button class="mod-cta kioku-candidate-adopt">残す</button>
+            <button class="kioku-candidate-discard">見送る</button>
+          </div>
+        </div>
+
+        <!-- Card 2 -->
+        <div class="kioku-candidate">
+          <div class="kioku-candidate-meta">7 行目 · 未採用</div>
+          <div class="kioku-candidate-label">原文</div>
+          <pre class="kioku-candidate-source">問：細胞の基本単位は？
+答：細胞</pre>
+          <label class="kioku-candidate-field">
+            <span>問い（編集可能）</span>
+            <textarea class="kioku-candidate-question" rows="2">細胞の基本単位は？</textarea>
+          </label>
+          <label class="kioku-candidate-field">
+            <span>答え（編集可能）</span>
+            <textarea class="kioku-candidate-answer" rows="2">細胞</textarea>
+          </label>
+          <div class="kioku-candidate-actions">
+            <button class="mod-cta kioku-candidate-adopt">残す</button>
+            <button class="kioku-candidate-discard">見送る</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="kioku-candidate-footer">
+        <button class="kioku-candidate-close">閉じる</button>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

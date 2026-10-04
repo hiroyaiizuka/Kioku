@@ -172,11 +172,7 @@ export class CandidateModal extends Modal {
     const scrollTop = contentEl.querySelector('.kioku-candidate-list')?.scrollTop ?? 0;
     const focus = this.focusState();
     contentEl.empty();
-    const scope = this.options.scope === 'selection' ? '選択範囲' : 'ノート全体';
     const explicit = this.entries.filter((entry) => entry.candidate);
-    const pending = explicit.filter((entry) => entry.state === 'open').length;
-    contentEl.createEl('p', { cls: 'kioku-candidate-summary',
-      text: `${scope}の明示した問い・答え：${explicit.length} 件（未採用 ${pending} 件）。採用したものだけ元ノートに ID を追記します。破棄・閉じるでは何も書き込みません。` });
     if (!explicit.length) this.renderSyntaxHint(contentEl);
     const list = contentEl.createDiv({ cls: 'kioku-candidate-list' });
     for (const entry of explicit) {
@@ -258,8 +254,8 @@ export class CandidateModal extends Modal {
   private actions(item: HTMLElement, entry: Entry): void {
     item.createDiv({ cls: 'kioku-candidate-message', text: entry.message });
     const actions = item.createDiv({ cls: 'kioku-candidate-actions' });
-    const adopt = actions.createEl('button', { text: '採用', cls: 'mod-cta kioku-candidate-adopt' });
-    const discard = actions.createEl('button', { text: '破棄', cls: 'kioku-candidate-discard' });
+    const adopt = actions.createEl('button', { text: '残す', cls: 'mod-cta kioku-candidate-adopt' });
+    const discard = actions.createEl('button', { text: '見送る', cls: 'kioku-candidate-discard' });
     // One adoption at a time: offsets of other cards are only shifted after a confirmed write.
     adopt.disabled = this.busy();
     discard.disabled = entry.state !== 'open';
@@ -284,7 +280,7 @@ export class CandidateModal extends Modal {
 
   private field(parent: HTMLElement, label: string, value: string, cls: string, key: string, update: (value: string) => void): void {
     const wrapper = parent.createEl('label', { cls: 'kioku-candidate-field' });
-    wrapper.createSpan({ text: label });
+    wrapper.createSpan({ text: `${label}（編集可能）` });
     const area = wrapper.createEl('textarea', { cls });
     area.dataset.kiokuKey = key;
     area.value = value;
@@ -397,7 +393,7 @@ export class CandidateModal extends Modal {
     if (checked.blocked) {
       item.createDiv({ cls: 'kioku-candidate-blocked', text: checked.blocked });
       const actions = item.createDiv({ cls: 'kioku-candidate-actions' });
-      const discard = actions.createEl('button', { text: '破棄', cls: 'kioku-candidate-discard' });
+      const discard = actions.createEl('button', { text: '見送る', cls: 'kioku-candidate-discard' });
       discard.addEventListener('click', () => {
         entry.state = 'discarded';
         this.render();

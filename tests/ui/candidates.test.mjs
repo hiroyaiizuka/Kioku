@@ -63,6 +63,8 @@ describe('extraction popup', () => {
     expect(items().map((item) => item.querySelector('.kioku-candidate-meta').textContent))
       .toEqual(['3 行目 · 未採用', '12 行目 · 未採用']);
     expect(card(0).querySelector('.kioku-candidate-question').value).toBe('光合成とは？');
+    expect(card(0).querySelector('.kioku-candidate-adopt').textContent).toBe('残す');
+    expect(card(0).querySelector('.kioku-candidate-discard').textContent).toBe('見送る');
     expect(app.calls.some((call) => call.startsWith('vault.'))).toBe(false);
   });
 
@@ -96,7 +98,6 @@ describe('extraction popup', () => {
     const from = NOTE.indexOf('答：'); editor.selection = [from, from + 2];
     extractCommand(plugin).checkCallback(false);
     expect(items()).toHaveLength(1);
-    expect(document.querySelector('.kioku-candidate-summary').textContent).toContain('選択範囲');
   });
 
   it('shows a syntax hint when nothing is found', () => {
