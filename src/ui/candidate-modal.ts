@@ -172,11 +172,7 @@ export class CandidateModal extends Modal {
     const scrollTop = contentEl.querySelector('.kioku-candidate-list')?.scrollTop ?? 0;
     const focus = this.focusState();
     contentEl.empty();
-    const scope = this.options.scope === 'selection' ? '選択範囲' : 'ノート全体';
     const explicit = this.entries.filter((entry) => entry.candidate);
-    const pending = explicit.filter((entry) => entry.state === 'open').length;
-    contentEl.createEl('p', { cls: 'kioku-candidate-summary',
-      text: `${scope}の明示した問い・答え：${explicit.length} 件（未採用 ${pending} 件）。残したものだけ元ノートに ID を追記します。見送る・閉じるでは何も書き込みません。` });
     if (!explicit.length) this.renderSyntaxHint(contentEl);
     const list = contentEl.createDiv({ cls: 'kioku-candidate-list' });
     for (const entry of explicit) {

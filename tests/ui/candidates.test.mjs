@@ -98,7 +98,6 @@ describe('extraction popup', () => {
     const from = NOTE.indexOf('答：'); editor.selection = [from, from + 2];
     extractCommand(plugin).checkCallback(false);
     expect(items()).toHaveLength(1);
-    expect(document.querySelector('.kioku-candidate-summary').textContent).toContain('選択範囲');
   });
 
   it('shows a syntax hint when nothing is found', () => {
