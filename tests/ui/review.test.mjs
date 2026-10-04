@@ -49,6 +49,22 @@ function key(value, init = {}, element = target()) {
   element.dispatchEvent(event);
   return event;
 }
+const backToPicker = () => {
+  // In the done screen, use the regular "デッキ選択に戻る" button
+  const doneButton = document.querySelector('.kioku-review-back');
+  if (doneButton) {
+    doneButton.click();
+    return;
+  }
+  // During review, use the gear menu
+  const gear = document.querySelector('.kioku-review-gear-button');
+  if (!gear) throw new Error('Gear button not found');
+  gear.click();
+  const menuItems = [...document.querySelectorAll('.kioku-review-menu-item')];
+  const menuItem = menuItems.find((item) => item.textContent === 'デッキに戻る');
+  if (!menuItem) throw new Error(`Menu item 'デッキに戻る' not found. Found: ${menuItems.map((item) => item.textContent).join(', ')}`);
+  menuItem.click();
+};
 async function openPicker(plugin) { plugin.ribbons[0].click(); await settle(); }
 async function startDeck(plugin, name = '全デッキ') { await openPicker(plugin); row(name).click(); await settle(); }
 
@@ -141,7 +157,7 @@ describe('review session', () => {
     while (phase() === 'question') { seen.push(question()); key(' '); key('3'); await settle(); }
     expect(seen).toEqual(['both', '心拍数は？', '図 [[heart.png]] は？']);
     expect(document.querySelector('.kioku-review-summary').textContent).toBe('評価 3 枚・スキップ 0 枚');
-    document.querySelector('.kioku-review-back').click(); await settle();
+    backToPicker(); await settle();
     expect(rows()).toContain('英語 | Due 0 · New 1 · Total 2');
     row('全デッキ').click(); await settle();
     expect(question()).toBe('apple');
@@ -169,7 +185,7 @@ describe('review session', () => {
     key(' '); key('S');
     expect(document.querySelector('.kioku-review-summary').textContent).toBe('評価 0 枚・スキップ 2 枚');
     expect(adapter.writes()).toEqual([]);
-    document.querySelector('.kioku-review-back').click(); await settle();
+    backToPicker(); await settle();
     expect(rows()[2]).toBe('医学 › 生理 | Due 0 · New 2 · Total 2');
   });
 
@@ -282,9 +298,10 @@ describe('keyboard safety', () => {
     key('1'); key('s');
     expect(phase()).toBe('failed');
     fail = false;
-    expect(document.querySelector('.kioku-review-back').disabled).toBe(true);
-    expect(document.querySelector('.kioku-review-open').disabled).toBe(true);
-    document.querySelector('.kioku-review-back').click();
+    const gearButton = document.querySelector('.kioku-review-gear-button');
+    expect(gearButton).toBeTruthy();
+    gearButton.click();
+    expect(document.querySelectorAll('.kioku-review-menu-item').length).toBe(2);
     expect(phase()).toBe('failed');
     expect(document.activeElement.classList.contains('kioku-review-retry')).toBe(true);
     key('Enter'); await settle();
@@ -360,7 +377,7 @@ describe('review edge cases', () => {
     document.querySelector('.kioku-review-extra').click(); await settle();
     expect(adapter.writes()).toEqual([]);
     expect(question()).toBe('both');
-    document.querySelector('.kioku-review-back').click(); await settle();
+    backToPicker(); await settle();
     expect(document.querySelector('.kioku-deck-allowance').textContent).toBe('今日の新規 残り 10 枚');
     expect(adapter.folders.has('Kioku')).toBe(false);
     row('全デッキ').click(); await settle();
@@ -373,7 +390,7 @@ describe('review edge cases', () => {
     await startDeck(plugin);
     document.querySelector('.kioku-review-extra').click(); await settle();
     vi.setSystemTime(new Date(2026, 9, 3, 9, 0));
-    document.querySelector('.kioku-review-back').click(); await settle();
+    backToPicker(); await settle();
     expect(document.querySelector('.kioku-deck-allowance').textContent).toBe('今日の新規 残り 0 枚');
     expect(adapter.writes()).toEqual([]);
   });

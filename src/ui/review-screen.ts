@@ -50,6 +50,7 @@ export class ReviewScreen {
   private failure = '';
   private closed = false;
   private warnedState = false;
+  private menuOpen = false;
 
   constructor(private readonly ctx: ReviewContext) {
     this.queue = new ReviewQueue(ctx.cards, (id) => ctx.store.state.cards[id], ctx.today);
@@ -212,9 +213,40 @@ export class ReviewScreen {
     screen.dataset.kiokuPhase = this.phase;
     // Keeps keyboard focus inside the modal when no button can take it (e.g. while saving).
     screen.tabIndex = -1;
-    const header = screen.createDiv({ cls: 'kioku-review-header' });
-    header.createSpan({ cls: 'kioku-review-deck', text: this.ctx.deckLabel });
-    header.createSpan({ cls: 'kioku-review-remaining',
+    const headerRow = screen.createDiv({ cls: 'kioku-review-header-row' });
+    const headerLeft = headerRow.createDiv({ cls: 'kioku-review-header-left' });
+    headerLeft.createSpan({ cls: 'kioku-review-deck', text: this.ctx.deckLabel });
+    const gearWrapper = headerRow.createDiv({ cls: 'kioku-review-gear-wrapper' });
+    gearWrapper.addEventListener('click', (evt) => evt.stopPropagation());
+    const gearButton = gearWrapper.createEl('button', { cls: 'kioku-review-gear-button', text: '⚙', attr: { 'aria-label': 'メニュー' } });
+    gearButton.addEventListener('click', () => {
+      this.menuOpen = !this.menuOpen;
+      this.render();
+    });
+    screen.addEventListener('click', () => {
+      if (this.menuOpen) {
+        this.menuOpen = false;
+        this.render();
+      }
+    });
+    if (this.menuOpen && this.current) {
+      const card = this.current;
+      const menu = gearWrapper.createDiv({ cls: 'kioku-review-gear-menu' });
+      const openNote = menu.createDiv({ cls: 'kioku-review-menu-item' });
+      openNote.setText('元のノートを開く');
+      openNote.addEventListener('click', () => {
+        this.menuOpen = false;
+        this.ctx.openNote(card);
+      });
+      const backToPicker = menu.createDiv({ cls: 'kioku-review-menu-item' });
+      backToPicker.setText('デッキに戻る');
+      backToPicker.addEventListener('click', () => {
+        this.menuOpen = false;
+        this.ctx.backToPicker();
+      });
+    }
+    const headerRight = headerRow.createDiv({ cls: 'kioku-review-header-right' });
+    headerRight.createSpan({ cls: 'kioku-review-remaining',
       text: `残り ${this.queue.remaining(this.allowance())} 枚` });
     if (this.ctx.store.readOnly) {
       screen.createDiv({ cls: 'kioku-review-readonly', text: '読み取り専用：評価は保存できません（スキップと閲覧だけできます）。' });
@@ -256,10 +288,6 @@ export class ReviewScreen {
       message.setText(this.failure);
       focus = this.button(actions, 'もう一度保存する', 'mod-cta kioku-review-retry', () => void this.save());
     }
-    const footer = screen.createDiv({ cls: 'kioku-review-footer' });
-    // After a failed save only "もう一度保存する" (same event) or closing remains: leaving silently could lose it.
-    this.button(footer, 'ノートを開く', 'kioku-review-open', () => this.ctx.openNote(card), busy);
-    this.button(footer, 'デッキ選択に戻る', 'kioku-review-back', () => this.ctx.backToPicker(), busy);
     (focus ?? screen).focus();
   }
 

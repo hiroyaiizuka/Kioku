@@ -156,9 +156,77 @@
   outline: none;
 }
 
-.kioku-deck-picker-modal .kioku-review-header {
+.kioku-deck-picker-modal .kioku-review-header-row {
   display: flex;
   justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: var(--size-4-2);
+}
+
+.kioku-deck-picker-modal .kioku-review-header-left {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.kioku-deck-picker-modal .kioku-review-gear-wrapper {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.kioku-deck-picker-modal .kioku-review-gear-button {
+  background: transparent;
+  border: none;
+  padding: var(--size-2-2);
+  cursor: pointer;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-s);
+}
+
+.kioku-deck-picker-modal .kioku-review-gear-button:hover {
+  background: var(--background-modifier-hover);
+}
+
+.kioku-deck-picker-modal .kioku-review-gear-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: var(--size-2-2);
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+  min-width: 180px;
+  z-index: 10;
+}
+
+.kioku-deck-picker-modal .kioku-review-menu-item {
+  padding: var(--size-2-3) var(--size-4-2);
+  cursor: pointer;
+  font-size: var(--font-ui-small);
+}
+
+.kioku-deck-picker-modal .kioku-review-menu-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+.kioku-deck-picker-modal .kioku-review-menu-item:first-child {
+  border-radius: var(--radius-m) var(--radius-m) 0 0;
+}
+
+.kioku-deck-picker-modal .kioku-review-menu-item:last-child {
+  border-radius: 0 0 var(--radius-m) var(--radius-m);
+}
+
+.kioku-deck-picker-modal .kioku-review-menu-item:only-child {
+  border-radius: var(--radius-m);
+}
+
+.kioku-deck-picker-modal .kioku-review-header-right {
   color: var(--text-muted);
   font-size: var(--font-ui-small);
 }
