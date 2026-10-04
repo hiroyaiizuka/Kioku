@@ -63,6 +63,8 @@ describe('extraction popup', () => {
     expect(items().map((item) => item.querySelector('.kioku-candidate-meta').textContent))
       .toEqual(['3 行目 · 未採用', '12 行目 · 未採用']);
     expect(card(0).querySelector('.kioku-candidate-question').value).toBe('光合成とは？');
+    expect(card(0).querySelector('.kioku-candidate-adopt').textContent).toBe('残す');
+    expect(card(0).querySelector('.kioku-candidate-discard').textContent).toBe('見送る');
     expect(app.calls.some((call) => call.startsWith('vault.'))).toBe(false);
   });
 
