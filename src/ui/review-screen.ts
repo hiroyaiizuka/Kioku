@@ -216,7 +216,8 @@ export class ReviewScreen {
     const headerRow = screen.createDiv({ cls: 'kioku-review-header-row' });
     const headerLeft = headerRow.createDiv({ cls: 'kioku-review-header-left' });
     headerLeft.createSpan({ cls: 'kioku-review-deck', text: this.ctx.deckLabel });
-    const gearWrapper = headerRow.createDiv({ cls: 'kioku-review-gear-wrapper' });
+    const headerRight = headerRow.createDiv({ cls: 'kioku-review-header-right' });
+    const gearWrapper = headerRight.createDiv({ cls: 'kioku-review-gear-wrapper' });
     gearWrapper.addEventListener('click', (evt) => evt.stopPropagation());
     const gearButton = gearWrapper.createEl('button', { cls: 'kioku-review-gear-button', text: '⚙', attr: { 'aria-label': 'メニュー' } });
     gearButton.addEventListener('click', () => {
@@ -245,7 +246,6 @@ export class ReviewScreen {
         this.ctx.backToPicker();
       });
     }
-    const headerRight = headerRow.createDiv({ cls: 'kioku-review-header-right' });
     headerRight.createSpan({ cls: 'kioku-review-remaining',
       text: `残り ${this.queue.remaining(this.allowance())} 枚` });
     if (this.ctx.store.readOnly) {
