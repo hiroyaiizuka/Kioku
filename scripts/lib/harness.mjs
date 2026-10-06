@@ -4,8 +4,10 @@ import { installedFiles, sha256, verifyDistribution } from './build.mjs';
 import { atomicWrite, ensureDirectory, safePath, safeRead } from './paths.mjs';
 
 export const markerContents = 'Kioku dedicated test vault v1\n';
-export function harnessPaths(root) {
-  const vault = join(root, 'test-vault');
+export function harnessPaths(root, env = process.env) {
+  const name = env.KIOKU_TEST_VAULT_NAME ?? 'test-vault';
+  if (!['test-vault', 'Kioku テスト用'].includes(name)) throw new Error('Unsupported Kioku test Vault name.');
+  const vault = join(root, name);
   return {
     root, vault,
     marker: join(vault, '.kioku-generated'),

@@ -121,7 +121,7 @@ Obsidian の設定 → Kioku で変更できます（設定はプラグインの
 
 ## 開発ビルドを専用 Vault で確認する
 
-一般利用者向け Release はまだありません。開発者は Node.js 22.22.3 で `npm ci`、`npm run check`、初回だけ `npm run harness:prepare` を実行し、`npm run harness:launch`（macOS）でプロジェクト内の `test-vault/` だけを開く専用 Obsidian を起動します。普段の Obsidian は開いたままで構いません。終了は `npm run harness:quit` です。既存 Vault へ自動導入しないでください。詳しくは [開発手順](docs/development.md) と [ハーネス](docs/harness.md) を参照してください。
+一般利用者向け Release はまだありません。開発者は Node.js 22.22.3 で `npm ci`、`npm run check`、初回だけ `npm run harness:prepare` を実行し、`npm run harness:launch`（macOS）でプロジェクト内の専用 Vault（既定 `test-vault/`）だけを開く専用 Obsidian を起動します。普段の Obsidian は開いたままで構いません。終了は `npm run harness:quit` です。既存 Vault へ自動導入しないでください。詳しくは [開発手順](docs/development.md) と [ハーネス](docs/harness.md) を参照してください。
 
 ## 対応範囲
 

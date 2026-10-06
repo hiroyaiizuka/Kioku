@@ -17,8 +17,10 @@ CI は `npm ci` と `npm run check` を実行し dist を検査用 artifact に�
 
 ## 専用 test-vault
 
+この文書の「test-vault」は専用 Vault を指す。既定は `test-vault/` で、`KIOKU_TEST_VAULT_NAME="Kioku テスト用"` を指定した場合は `Kioku テスト用/` と読み替える（末尾の「同梱 asar による起動と専用 Vault の名前」）。
+
 1. `npm ci && npm run check`
-2. 初回だけ `npm run harness:prepare`。`test-vault/` が存在すれば拒否し、既存 Vault を採用しない。
+2. 初回だけ `npm run harness:prepare`。選択中の専用 Vault（既定 `test-vault/`、`KIOKU_TEST_VAULT_NAME` 指定時は `Kioku テスト用/`）が既に存在すれば拒否し、既存 Vault を採用しない。
 3. 手動編集後は専用インスタンスを `npm run harness:quit` で止めて `npm run harness:update`。built plugin 4 files 以外を変えない。
 4. 起動前に `npm run harness:preflight`。source inputs = 再生成した production bytes/imports = dist = installed bytes、marker、ID/version/build ID、enabled plugin が Kioku だけであることを見る。再生成はメモリ上のみで dist を修復しない。
 
@@ -29,8 +31,8 @@ prepare/update/preflight は filesystem の成功であり、Obsidian UI の成�
 利用者の通常の Obsidian は終了させない。Electron の single-instance lock は `--user-data-dir` ごとなので、harness はプロジェクト内の専用 profile で2つ目の Obsidian を並行起動する。harness とエージェントは、アプリ名による終了・起動（`osascript quit`、`pkill`/`killall`、`open -a`/`open -n -a`）を一切実行しない。
 
 - `npm run harness:launch`（macOS のみ。他 platform は推測せず拒否）
-  - preflight 後、`.tooling/obsidian-profile/`（git 管理外）を containment/symlink/hard link 検査付きで作り、profile の `obsidian.json` に **test-vault だけ**を `open: true` で登録する（vault ID は test-vault path から決定的に導出、`updateDisabled: true` で profile 内の自動更新を止める）。
-  - 利用者の `~/Library/Application Support/obsidian/` から最新 semver の `obsidian-<ver>.asar` を **読み取りだけ**して profile へ copy する（hash 一致なら再利用、他 version の asar は profile から除去）。installer 同梱版（例: 1.6.7）ではなくこの版が起動する。asar が無い、または `manifest.minAppVersion` 未満なら拒否する。
+  - preflight 後、`.tooling/obsidian-profile/`（git 管理外）を containment/symlink/hard link 検査付きで作り、profile の `obsidian.json` に **専用 Vault だけ**（既定 `test-vault`、または `KIOKU_TEST_VAULT_NAME` で選んだ「Kioku テスト用」。末尾の節を参照）を `open: true` で登録する（vault ID はその Vault の path から決定的に導出、`updateDisabled: true` で profile 内の自動更新を止める）。
+  - 利用者の `~/Library/Application Support/obsidian/` から最新 semver の `obsidian-<ver>.asar` を **読み取りだけ**して profile へ copy する（hash 一致なら再利用、他 version の asar は profile から除去）。installer 同梱版（例: 1.6.7）ではなくこの版が起動する。`manifest.minAppVersion` 未満なら拒否する。この updater archive が1つも無い場合だけ、署名を検証したアプリ本体の同梱 asar をその場で使う（下の「同梱 asar による起動と専用 Vault の名前」）。
   - `/Applications/Obsidian.app/Contents/MacOS/Obsidian`（`KIOKU_OBSIDIAN_BINARY` で変更可。正規化済み絶対 path の既存実行ファイルだけ）を `--user-data-dir=<profile> --remote-debugging-port=<KIOKU_CDP_PORT, 既定 9222> --remote-debugging-address=127.0.0.1` で detached 直接実行し、出力は `.tooling/obsidian-instance.log`。環境変数は `HOME` を含めそのまま引き継ぎ、`ELECTRON_*`/`NODE_OPTIONS` だけ渡さない。
   - 以前は子プロセスの `HOME` を `.tooling/obsidian-home/` にしていたが、実機で login keychain が見つからず Electron safeStorage（"Obsidian Safe Storage"）が `SecKeychainAddGenericPassword` → `makeLoginAuthUI` → `AuthorizationCopyRights` に入り、SecurityAgent の認証ダイアログでメインスレッドが止まった（CDP page が出ず 90 秒で launch timeout、SIGTERM も 20 秒以内に処理されなかった。`artifacts/lev-279/e5f67e6-partial/RECORD.md` Step 3。git 管理外のローカル証跡）。そのため HOME の上書きはやめた。過去の版が残した `.tooling/obsidian-home/` は不要で、専用インスタンス停止中に `rm -rf .tooling/obsidian-home` で手動削除してよい（プロジェクト内の .tooling だけ。harness は自動削除しない）。
   - **CLI socket**: インストール済み 1.14.3 の `main.js` は `var W=process.platform==="darwin"` と `T=oe?…:F.join(!W&&process.env.XDG_RUNTIME_DIR||ge.homedir(),".obsidian-cli.sock")` で socket path を決め、`if(!oe)try{m.unlinkSync(T)}catch(t){}…Qe.listen(T)` で起動時に置き換え、`will-quit` で `m.unlinkSync(T)` する。macOS（`W`）では `XDG_RUNTIME_DIR` は無視されるため、HOME を変えずに socket を分ける手段は無い。したがって専用インスタンスは起動中 `~/.obsidian-cli.sock`（`$HOME` 直下）を自分のものにし、`harness:quit` 時に削除する。**既定では、起動前に lstat だけで判定し、この socket が存在すれば launch を拒否する。** 判定は何も作らない前段と、profile 準備後の spawn 直前の2回行う。lstat が ENOENT 以外のエラー（EACCES、ENOTDIR、ELOOP など）なら判定不能として拒否する。`HOME` が空文字なら Node の `os.homedir()` が空を返し Obsidian が cwd 相対に socket を作るため、launch を拒否する（未設定なら passwd の home）。spawn から Obsidian 自身の unlink/listen までの1秒未満の窓で利用者の Obsidian が socket を作る競合は、外から防げない残存リスク。 奪ってよいのは `KIOKU_ALLOW_CLI_SOCKET_TAKEOVER=1` を明示した場合だけで、その場合: 実行中は利用者やエージェントの `obsidian` CLI コマンドが専用 test-vault インスタンスに届く（smoke 中は CLI を使わない。CLI による書き込みは baseline を無効にする）。quit で socket が削除され、利用者の CLI は利用者の Obsidian を再起動するまで使えない（GUI には影響しない想定）。launch 出力の `cliSocket.existedBeforeLaunch`/`takenOver` に記録する。**専用インスタンスの実行中に利用者が自分の Obsidian を起動すると、その Obsidian が socket を作り直し、`harness:quit` 時に専用インスタンスの will-quit の unlink がそれを削除する**（asar からの推定、未検証）。実行中は自分の Obsidian を起動しないか、起動した場合は quit 後に CLI のため再起動が必要になると考える。launch は page ready 後に socket を lstat し、存在すれば `{dev, ino}` を state に記録する。`harness:quit` は SIGTERM 直前と終了後に lstat だけで確認し（触らない）、直前の socket の `{dev, ino}` が記録と異なる（または記録が無いのに socket がある）場合だけ、他者（多くは利用者の Obsidian）が作り直したとみなして警告する。
@@ -181,3 +183,10 @@ smoke script 自身はアプリを終了/起動しない。restart は `harness:
 ## M3 実機確認（LEV-277、未実施）
 
 M3 フェーズ A（`docs/m3-design.md` §16）の実機確認はまだ。手順の案は `docs/m3-design.md` §14（専用インスタンスの `harness:launch` / `harness:quit` だけ、本番 Vault は使わない、外部サービスへの送信は利用者の同意を得てから）。実施したら結果と証跡（`artifacts/lev-277/`）をここに記録する。単体テスト（偽の HTTP クライアント）の成功を実機成功と呼ばない。
+
+## 同梱 asar による起動と専用 Vault の名前
+
+- **専用 Vault の名前**：既定は `test-vault`。`KIOKU_TEST_VAULT_NAME="Kioku テスト用"` を指定すると、この名前の Vault を使う。許可するのはこの2つの名前だけで、どちらもこの checkout の直下に限る（ほかの名前・パスは拒否）。指定する場合は prepare/update・launch・preflight・smoke のすべてで同じ値にする。marker・containment・link・build hash の検査はそのまま。既存の Vault を移動・削除することはない。
+- **同梱 asar による起動**：利用者の app-support に updater archive（`obsidian-<ver>.asar`）が1つも無い場合だけ、実行ファイル自身の macOS アプリ本体を検証して、その同梱 asar をその場で使う。検証するのは、Apple の署名チェーン、Obsidian の team `6JSW4SJWN9`、bundle ID `md.obsidian`、Info.plist と asar 内 package の版の一致、`manifest.minAppVersion`。updater archive に見せかけて profile へ copy することはしない。署名・link・メタデータの不正や版の不一致は拒否する（fail closed）。古い updater archive が残っている profile は、削除せずに拒否する。以前の「installer 同梱版は使わない」という一律の拒否は、この検証付きの経路で置き換えた。
+- 残るリスク：codesign の検証のあと、Info.plist と asar は別々に読み直され、Obsidian も起動時に asar をもう一度読む。同じ利用者の権限でアプリ本体を書き換えられる者はこの間に差し替え得るが、その権限があればハーネス自体も書き換えられるため、ここでは防がない。
+- 起動後に、実行中の Vault のパス・アプリの版・読み込まれた plugin を確かめる点は変わらない。CLI socket の奪取に明示の同意（`KIOKU_ALLOW_CLI_SOCKET_TAKEOVER=1`）が要る点も変わらない。

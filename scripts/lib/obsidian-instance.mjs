@@ -1,4 +1,4 @@
-// Dedicated, concurrent Obsidian instance for test-vault only (tooling; never part of the plugin runtime).
+// Dedicated, concurrent Obsidian instance for the dedicated test Vault only (test-vault or Kioku テスト用) (tooling; never part of the plugin runtime).
 // The user's own Obsidian keeps running: Electron's single-instance lock is per --user-data-dir, so this
 // instance uses a profile inside the project and is identified/terminated only by its recorded PID.
 import { spawn, spawnSync } from 'node:child_process';
@@ -10,6 +10,7 @@ import { userInfo } from 'node:os';
 import { basename, isAbsolute, join, normalize } from 'node:path';
 import { readJSON, sha256 } from './build.mjs';
 import { preflight } from './harness.mjs';
+import { readBundledObsidian } from './bundled-obsidian.mjs';
 import { atomicWrite, ensureDirectory, safePath, safeRead } from './paths.mjs';
 import { sleep } from './cdp.mjs';
 
@@ -60,9 +61,12 @@ export function defaultAsarSourceDir(platform = process.platform, home = userInf
 }
 
 /** Pick the newest installed obsidian-<semver>.asar; read-only, regular files only. */
-export function selectAsar(sourceDir, minAppVersion) {
+export function selectAsar(sourceDir, minAppVersion, bundledSource) {
   let directory;
-  try { directory = lstatSync(sourceDir); } catch { directory = null; }
+  try { directory = lstatSync(sourceDir); } catch (error) {
+    if (error.code === 'ENOENT' && bundledSource) return checkedBundle(bundledSource, minAppVersion);
+    directory = null;
+  }
   if (!directory?.isDirectory() || directory.isSymbolicLink()) {
     throw new Error(`Obsidian app-support directory not found (or not a real directory): ${sourceDir}`);
   }
@@ -70,7 +74,8 @@ export function selectAsar(sourceDir, minAppVersion) {
     .map((name) => ({ name, version: asarPattern.exec(name).slice(1).join('.') }))
     .sort((a, b) => compareVersions(b.version, a.version));
   if (!candidates.length) {
-    throw new Error('No installed obsidian-<version>.asar found. Update your normal Obsidian once; the bundled installer version is not used.');
+    if (bundledSource) return checkedBundle(bundledSource, minAppVersion);
+    throw new Error('No installed obsidian-<version>.asar found. Update your normal Obsidian once; the installer version is used only through the verified bundled fallback.');
   }
   const [newest] = candidates;
   if (compareVersions(newest.version, minAppVersion) < 0) {
@@ -83,11 +88,25 @@ export function selectAsar(sourceDir, minAppVersion) {
   return { ...newest, source: file, bytes, sha256: sha256(bytes) };
 }
 
-/** Create the in-project profile, copy (or reuse) the asar, and register only test-vault. */
-export function prepareProfile(root, { vault, sourceDir, minAppVersion, now = Date.now() }) {
+function checkedBundle(readBundle, minAppVersion) {
+  const bundle = readBundle();
+  if (compareVersions(bundle.version, minAppVersion) < 0) throw new Error(`Bundled Obsidian ${bundle.version} is below manifest.minAppVersion ${minAppVersion}.`);
+  return bundle;
+}
+
+/** Create the in-project profile, copy (or reuse) the asar, and register only the dedicated test Vault. */
+export function prepareProfile(root, { vault, sourceDir, minAppVersion, bundledSource, now = Date.now() }) {
   const paths = instancePaths(root);
   ensureDirectory(root, paths.tooling); ensureDirectory(root, paths.profile);
-  const asar = selectAsar(sourceDir, minAppVersion);
+  const asar = selectAsar(sourceDir, minAppVersion, bundledSource);
+  if (asar.bundled) {
+    if (readdirSync(paths.profile).some((name) => /^obsidian-.*\.asar$/u.test(name) || name === 'obsidian.asar.tmp')) {
+      throw new Error('Bundled mode refuses existing profile updater archives; nothing was deleted.');
+    }
+    const config = obsidianConfig(vault, now);
+    atomicWrite(root, join(paths.profile, 'obsidian.json'), `${JSON.stringify(config)}\n`);
+    return { version: asar.version, asar: asar.source, source: asar.source, sha256: asar.sha256, bundled: true, reused: false, removed: [], config };
+  }
   const destination = join(paths.profile, asar.name);
   const reused = safePath(root, destination, 'file', true) && sha256(safeRead(root, destination)) === asar.sha256;
   if (!reused) atomicWrite(root, destination, asar.bytes);
@@ -373,7 +392,7 @@ async function launchLocked(root, env, system, paths) {
   assertSocketTakeoverAllowed(socket, env);
 
   const profile = prepareProfile(root, { vault: expected.vault, sourceDir: system.asarSourceDir ?? defaultAsarSourceDir(system.platform),
-    minAppVersion, now: system.now().getTime() });
+    minAppVersion, bundledSource: () => readBundledObsidian(executable), now: system.now().getTime() });
   // Re-check right before spawn: a socket may have appeared meanwhile (e.g. the user started Obsidian). A sub-second
   // window between spawn and Obsidian's own unlink/listen remains and cannot be closed from outside (docs/harness.md).
   const socketExisted = assertSocketTakeoverAllowed(socket, env);
@@ -414,10 +433,10 @@ async function launchLocked(root, env, system, paths) {
   writeState(root, { ...state, cliSocket: { path: socket, ...(identity ?? {}) } });
   const restrictedMode = await system.enableCommunityPlugins({ port, target: page.target });
   return { status: 'LAUNCHED', pid: child.pid, version: page.state.version, port, startedAt, profile: paths.profile,
-    vault: expected.vault, asar: { version: profile.version, reused: profile.reused, removed: profile.removed },
+    vault: expected.vault, asar: { version: profile.version, source: profile.source, sha256: profile.sha256, bundled: profile.bundled === true, reused: profile.reused, removed: profile.removed },
     restrictedMode, log: paths.log,
     cliSocket: { path: socket, existedBeforeLaunch: socketExisted, takenOver: socketExisted,
-      note: 'Owned by the dedicated instance while it runs (CLI commands reach test-vault) and removed on harness:quit.' } };
+      note: 'Owned by the dedicated instance while it runs (CLI commands reach the dedicated test Vault) and removed on harness:quit.' } };
 }
 
 /** Terminate only the recorded PID, after proving its command line carries the dedicated profile flag. */

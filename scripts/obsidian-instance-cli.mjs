@@ -3,7 +3,7 @@ import { heavyQueueEnabled, launchWithQueue, quitWithQueue } from './lib/heavy-q
 import { defaultSystem, launchDedicated, quitDedicated, resolveQuitTimeout } from './lib/obsidian-instance.mjs';
 import { projectRoot } from './lib/paths.mjs';
 
-// Starts/stops ONLY the dedicated test-vault instance (own --user-data-dir under .tooling/). It never signals,
+// Starts/stops ONLY the dedicated test Vault instance (test-vault or Kioku テスト用; own --user-data-dir under .tooling/). It never signals,
 // quits or reconfigures the user's own Obsidian, and never looks processes up by name.
 try {
   const command = process.argv[2];
@@ -18,6 +18,6 @@ try {
     : await (command === 'launch' ? launchWithQueue(root, process.env, launch) : quitWithQueue(root, process.env, quit));
   console.info(JSON.stringify(result, null, 2));
   if (command === 'launch') {
-    console.info('Dedicated instance started for test-vault only. This is not a UI PASS; run the smoke with a pre-launch baseline.');
+    console.info('Dedicated instance started for the dedicated test Vault only. This is not a UI PASS; run the smoke with a pre-launch baseline.');
   }
 } catch (error) { console.error(error.message); process.exitCode = 1; }
