@@ -1,4 +1,4 @@
-import { Modal, Notice, type App } from 'obsidian';
+import { Modal, Notice, Scope, type App } from 'obsidian';
 import { errorMessage } from '../cards/error-message';
 import { buildDeckIndex, type DeckIndex, type DeckNode } from '../decks/index';
 import { scanVault, type ScanResult } from '../decks/scan';
@@ -50,6 +50,13 @@ export class DeckPickerModal extends Modal {
 
   constructor(app: App, private readonly options: DeckPickerOptions) {
     super(app);
+    // Native Obsidian dispatches Scope hotkeys before DOM capture listeners.
+    // Keep the modal's original scope as parent so its other bindings survive.
+    this.scope = new Scope(this.scope);
+    this.scope.register([], 'Escape', (evt) => {
+      if (!this.review?.handleKey(evt)) this.close();
+      return false;
+    });
   }
 
   override onOpen(): void {

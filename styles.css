@@ -214,13 +214,33 @@
 }
 
 .kioku-deck-picker-modal .kioku-review-menu-item {
+  display: flex;
+  justify-content: flex-start;
+  width: 100%;
+  height: auto;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+  text-align: left;
   padding: var(--size-2-3) var(--size-4-2);
   cursor: pointer;
   font-size: var(--font-ui-small);
 }
 
-.kioku-deck-picker-modal .kioku-review-menu-item:hover {
+.kioku-deck-picker-modal .kioku-review-menu-item:hover:not(:disabled) {
   background: var(--background-modifier-hover);
+}
+
+.kioku-deck-picker-modal .kioku-review-menu-item:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -2px;
+}
+
+.kioku-deck-picker-modal .kioku-review-menu-item:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 
 .kioku-deck-picker-modal .kioku-review-menu-item:first-child {

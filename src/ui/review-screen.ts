@@ -36,7 +36,7 @@ type Action = () => void;
  * Question → reveal → rate (1–4) → next, inside the deck picker modal. Keyboard input arrives
  * through `handleKey` only (one path; native button activation by Space/Enter is suppressed), so a
  * focused button and the shortcut can never both act. Key repeat and IME composition are ignored,
- * and every input is ignored while a rating is being saved.
+ * and rating/navigation actions are blocked while saving; the gear menu can still open and close.
  */
 export class ReviewScreen {
   private readonly queue: ReviewQueue;
@@ -51,6 +51,8 @@ export class ReviewScreen {
   private closed = false;
   private warnedState = false;
   private menuOpen = false;
+  /** Set when the gear or Escape toggles the menu: the next render focuses the menu or returns focus to the gear. */
+  private menuFocus: 'menu' | 'gear' | null = null;
 
   constructor(private readonly ctx: ReviewContext) {
     this.queue = new ReviewQueue(ctx.cards, (id) => ctx.store.state.cards[id], ctx.today);
@@ -86,9 +88,10 @@ export class ReviewScreen {
   /** `undefined`: not ours. `null`: ours but nothing to do now (e.g. while saving). */
   private keyAction(evt: KeyboardEvent): Action | null | undefined {
     const key = evt.key;
+    // Escape closes an open menu only (not the modal), also while saving.
+    if (key === 'Escape') return this.menuOpen && this.current ? () => this.toggleMenu(false) : undefined;
     const activation = key === ' ' || key === 'Enter';
     if (!activation && !['1', '2', '3', '4', 's', 'S'].includes(key)) return undefined;
-    if (this.phase === 'saving') return null;
     if (activation) {
       // Space / Enter act on the focused Kioku button through this single path.
       const focused = evt.target ? this.actions.get(evt.target as HTMLElement) : undefined;
@@ -113,7 +116,15 @@ export class ReviewScreen {
     return button;
   }
 
+  private toggleMenu(open: boolean): void {
+    this.menuOpen = open;
+    this.menuFocus = open ? 'menu' : 'gear';
+    this.render();
+  }
+
   private advance(): void {
+    this.menuOpen = false;
+    this.menuFocus = null;
     this.current = this.queue.next(this.allowance());
     this.phase = this.current ? 'question' : 'done';
     this.render();
@@ -219,35 +230,26 @@ export class ReviewScreen {
     const headerRight = headerRow.createDiv({ cls: 'kioku-review-header-right' });
     const gearWrapper = headerRight.createDiv({ cls: 'kioku-review-gear-wrapper' });
     gearWrapper.addEventListener('click', (evt) => evt.stopPropagation());
-    const gearButton = gearWrapper.createEl('button', { cls: 'kioku-review-gear-button', text: '⚙' });
-    if (!this.menuOpen) {
-      gearButton.setAttribute('aria-label', 'メニュー');
-    }
-    gearButton.addEventListener('click', () => {
-      this.menuOpen = !this.menuOpen;
-      this.render();
-    });
+    const gearButton = this.button(gearWrapper, '⚙', 'kioku-review-gear-button',
+      () => this.toggleMenu(!this.menuOpen), !this.current);
+    gearButton.setAttribute('aria-label', 'メニュー');
+    gearButton.setAttribute('aria-expanded', String(this.menuOpen));
     screen.addEventListener('click', () => {
-      if (this.menuOpen) {
-        this.menuOpen = false;
-        this.render();
-      }
+      if (this.menuOpen) this.toggleMenu(false);
     });
+    let firstMenuItem: HTMLButtonElement | null = null;
     if (this.menuOpen && this.current) {
       const card = this.current;
       const menu = gearWrapper.createDiv({ cls: 'kioku-review-gear-menu' });
-      const openNote = menu.createDiv({ cls: 'kioku-review-menu-item' });
-      openNote.setText('元のノートを開く');
-      openNote.addEventListener('click', () => {
+      const blocked = this.phase === 'saving' || this.phase === 'failed';
+      firstMenuItem = this.button(menu, '元のノートを開く', 'kioku-review-menu-item', () => {
         this.menuOpen = false;
         this.ctx.openNote(card);
-      });
-      const backToPicker = menu.createDiv({ cls: 'kioku-review-menu-item' });
-      backToPicker.setText('デッキに戻る');
-      backToPicker.addEventListener('click', () => {
+      }, blocked);
+      this.button(menu, 'デッキに戻る', 'kioku-review-menu-item', () => {
         this.menuOpen = false;
         this.ctx.backToPicker();
-      });
+      }, blocked);
     }
     headerRight.createSpan({ cls: 'kioku-review-remaining',
       text: `残り ${this.queue.remaining(this.allowance())} 枚` });
@@ -292,7 +294,10 @@ export class ReviewScreen {
       message.setText(this.failure);
       focus = this.button(actions, 'もう一度保存する', 'mod-cta kioku-review-retry', () => void this.save());
     }
-    (focus ?? screen).focus();
+    const menuFocus = this.menuFocus;
+    this.menuFocus = null;
+    const menuTarget = firstMenuItem && !firstMenuItem.disabled ? firstMenuItem : focus ?? gearButton;
+    (menuFocus === 'menu' ? menuTarget : menuFocus === 'gear' ? gearButton : focus ?? screen).focus();
   }
 
   private renderDone(screen: HTMLElement): void {
