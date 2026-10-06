@@ -1,0 +1,14 @@
+{
+  "extraKnownMarketplaces": {
+    "pstack-claude": {
+      "source": {
+        "source": "git",
+        "url": "https://github.com/michael-denyer/pstack-claude.git",
+        "ref": "v0.9.67"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "pstack@pstack-claude": true
+  }
+}
