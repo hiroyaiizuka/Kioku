@@ -143,13 +143,18 @@
 }
 
 .kioku-deck-picker-modal .kioku-deck-footer,
-.kioku-deck-picker-modal .kioku-review-actions,
-.kioku-deck-picker-modal .kioku-review-footer {
+.kioku-deck-picker-modal .kioku-review-actions {
   display: flex;
   flex-wrap: wrap;
   gap: var(--size-4-2);
   justify-content: flex-end;
   margin-top: var(--size-4-3);
+}
+
+/* Review screen: the question leads; count, menu and secondary actions stay quiet. */
+
+.kioku-deck-picker-modal .kioku-review {
+  container: kioku-review / inline-size;
 }
 
 .kioku-deck-picker-modal .kioku-review:focus {
@@ -158,46 +163,20 @@
 
 .kioku-deck-picker-modal .kioku-review-header-row {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  align-items: flex-start;
+  gap: var(--size-4-2);
   margin-bottom: var(--size-4-2);
 }
 
-.kioku-deck-picker-modal .kioku-review-header-left {
+.kioku-deck-picker-modal .kioku-review-remaining {
   color: var(--text-muted);
   font-size: var(--font-ui-small);
-}
-
-.kioku-deck-picker-modal .kioku-review-header-right {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: var(--size-2-2);
-  color: var(--text-muted);
-  font-size: var(--font-ui-small);
+  font-variant-numeric: tabular-nums;
 }
 
 .kioku-deck-picker-modal .kioku-review-gear-wrapper {
   position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-}
-
-.kioku-deck-picker-modal .kioku-review-gear-button {
-  background: transparent;
-  border: none;
-  padding: var(--size-2-2);
-  cursor: pointer;
-  color: var(--text-muted);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-s);
-}
-
-.kioku-deck-picker-modal .kioku-review-gear-button:hover {
-  background: var(--background-modifier-hover);
 }
 
 .kioku-deck-picker-modal .kioku-review-gear-menu {
@@ -260,13 +239,128 @@
   max-height: 30vh;
   overflow-y: auto;
   overflow-wrap: anywhere;
-  padding: var(--size-4-2) 0;
 }
 
-.kioku-deck-picker-modal .kioku-review-readonly,
+.kioku-deck-picker-modal .kioku-review-question {
+  padding: var(--size-4-3) 0 var(--size-4-5);
+  font-size: calc(var(--font-text-size) * 1.2);
+  line-height: var(--line-height-normal);
+}
+
+.kioku-deck-picker-modal .kioku-review-answer {
+  padding: var(--size-4-4) 0 var(--size-4-2);
+  border-top: 1px solid var(--background-modifier-border);
+  font-size: var(--font-text-size);
+}
+
+.kioku-deck-picker-modal .kioku-review-question > :first-child,
+.kioku-deck-picker-modal .kioku-review-answer > :first-child {
+  margin-top: 0;
+}
+
+.kioku-deck-picker-modal .kioku-review-question > :last-child,
+.kioku-deck-picker-modal .kioku-review-answer > :last-child {
+  margin-bottom: 0;
+}
+
+.kioku-deck-picker-modal .kioku-review-key {
+  padding: 0 var(--size-2-2);
+  border: 1px solid currentColor;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+  opacity: 0.7;
+}
+
+.kioku-deck-picker-modal .kioku-review-actions button {
+  gap: var(--size-4-2);
+}
+
+.kioku-deck-picker-modal .kioku-review-skip {
+  /* Quiet button: its text lines up with the content edge, not its padding. */
+  margin-inline: calc(-1 * var(--size-4-2)) auto;
+  padding-inline: var(--size-4-2);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+}
+
+.kioku-deck-picker-modal .kioku-review-skip:hover:not(:disabled) {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+/* Restores Obsidian's keyboard focus ring, which the quiet style above would otherwise remove. */
+.kioku-deck-picker-modal .kioku-review-skip:focus-visible {
+  box-shadow: 0 0 0 3px var(--background-modifier-border-focus);
+}
+
+.kioku-deck-picker-modal .kioku-review-grades {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--size-4-2);
+  margin-top: var(--size-4-3);
+}
+
+.kioku-deck-picker-modal .kioku-review-grade {
+  display: grid;
+  grid-template-columns: auto auto;
+  justify-content: center;
+  align-items: center;
+  gap: var(--size-2-1) var(--size-2-3);
+  height: auto;
+  padding: var(--size-4-2);
+  white-space: normal;
+}
+
+.kioku-deck-picker-modal .kioku-review-grade-label {
+  white-space: nowrap;
+}
+
+.kioku-deck-picker-modal .kioku-review-interval {
+  grid-column: 1 / -1;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+}
+
+.kioku-deck-picker-modal .kioku-review-grade.mod-cta .kioku-review-interval {
+  color: inherit;
+}
+
+.kioku-deck-picker-modal .kioku-review-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--size-4-2) var(--size-4-3);
+  margin-top: var(--size-4-3);
+}
+
 .kioku-deck-picker-modal .kioku-review-message {
+  flex: 1 1 16rem;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.kioku-deck-picker-modal .kioku-review[data-kioku-phase="failed"] .kioku-review-message {
+  color: var(--text-error);
+}
+
+.kioku-deck-picker-modal .kioku-review-retry {
+  margin-inline-start: auto;
+}
+
+.kioku-deck-picker-modal .kioku-review-readonly {
   color: var(--text-warning);
   font-size: var(--font-ui-small);
+}
+
+/* Four grades need about 27rem; below that they wrap as two pairs instead of breaking words. */
+@container kioku-review (max-width: 27rem) {
+  .kioku-deck-picker-modal .kioku-review-grades {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .kioku-settings-status {

@@ -17,12 +17,17 @@ const NOTES = {
 const H = 'Kioku/history-2026.jsonl';
 const S = 'Kioku/state.json';
 
+// Test-only setIcon stand-in, prepended to the bundled source because tests/helpers stays unchanged here.
+// esbuild reads `import_obsidian.setIcon` at call time, so this assignment reaches the review screen.
+const ICON_SHIM = "require('obsidian').setIcon ??= (el, id) => { el.setAttribute('data-icon', id);"
+  + " el.replaceChildren(el.ownerDocument.createElementNS('http://www.w3.org/2000/svg', 'svg')); };\n";
+
 let dom;
 let Plugin;
 let notices;
 beforeEach(async () => {
   dom = installDom(); notices = []; renders.length = 0; MockComponent.instances.length = 0;
-  Plugin = await compilePlugin(readFileSync('src/main.ts', 'utf8'), notices);
+  Plugin = await compilePlugin(ICON_SHIM + readFileSync('src/main.ts', 'utf8'), notices);
   vi.useFakeTimers({ toFake: ['Date'], now: new Date(2026, 9, 2, 10, 0) });
 });
 afterEach(() => { vi.useRealTimers(); dom.window.close(); delete globalThis.document; delete globalThis.window; });
@@ -41,6 +46,10 @@ const rows = () => [...document.querySelectorAll('.kioku-deck-row')].map((row) =
   `${row.querySelector('.kioku-deck-name').textContent} | ${row.querySelector('.kioku-deck-counts').textContent}${row.querySelector('.kioku-deck-later') ? ' | later' : ''}`);
 const row = (name) => [...document.querySelectorAll('.kioku-deck-row')].find((item) => item.querySelector('.kioku-deck-name').textContent === name);
 const phase = () => document.querySelector('.kioku-review')?.dataset.kiokuPhase;
+/** Grade buttons as "label key interval" (each part is its own element). */
+const grades = () => [...document.querySelectorAll('.kioku-review-grade')].map((button) =>
+  ['.kioku-review-grade-label', '.kioku-review-key', '.kioku-review-interval'].map((part) => button.querySelector(part).textContent).join(' '));
+const primaries = () => [...document.querySelectorAll('.kioku-review .mod-cta')].map((button) => button.className);
 const question = () => document.querySelector('.kioku-review-question')?.textContent;
 const historyLines = (adapter) => (adapter.files.get(H) ?? '').split('\n').filter(Boolean).map((line) => JSON.parse(line));
 const target = () => document.activeElement && document.activeElement !== document.body ? document.activeElement : document.querySelector('.kioku-review');
@@ -134,8 +143,7 @@ describe('review session', () => {
     key(' ');
     expect(phase()).toBe('answer');
     expect(document.querySelector('.kioku-review-answer').textContent).toBe('両方');
-    expect([...document.querySelectorAll('.kioku-review-grade')].map((button) => button.textContent))
-      .toEqual(['もう一度（1）· 1日', '難しい（2）· 2日', '普通（3）· 3日', '簡単（4）· 8日']);
+    expect(grades()).toEqual(['もう一度 1 1日', '難しい 2 2日', '普通 3 3日', '簡単 4 8日']);
     expect(document.activeElement.dataset.kiokuGrade).toBe('3');
     key('3');
     await settle();
@@ -322,6 +330,82 @@ describe('keyboard safety', () => {
     key('Escape');
     release(); await settle();
     expect(notices).toEqual(['Kioku：保存中に閉じた評価を保存できませんでした。次に開いたとき、その評価が反映されているか確認してください。（記録ファイルに書き込めませんでした（EIO）。）']);
+  });
+});
+
+describe('review screen layout', () => {
+  it('names the deck once (modal title); the header holds only the count and the standard gear icon', async () => {
+    const { plugin } = setup();
+    await startDeck(plugin, '英語');
+    expect(picker().querySelector('h2').textContent).toBe('Kioku — 英語');
+    expect(document.querySelector('.kioku-review').textContent).not.toContain('英語');
+    const header = document.querySelector('.kioku-review-header-row');
+    expect(header.textContent).toBe('残り 2 枚');
+    const gear = header.querySelector('.kioku-review-gear-button');
+    expect(gear.dataset.icon).toBe('settings');
+    expect(gear.querySelector('svg')).not.toBeNull();
+    expect(gear.classList.contains('clickable-icon')).toBe(true);
+    expect(gear.getAttribute('aria-label')).toBe('メニュー');
+    expect(gear.getAttribute('aria-expanded')).toBe('false');
+    expect(gear.classList.contains('is-active')).toBe(false);
+    gear.click();
+    const open = document.querySelector('.kioku-review-gear-button');
+    expect([open.getAttribute('aria-expanded'), open.classList.contains('is-active')]).toEqual(['true', true]);
+  });
+
+  it('drops the menu on the done screen, where both items would have no card to act on', async () => {
+    const { plugin } = setup();
+    await startDeck(plugin, '英語');
+    key('s'); key('s');
+    expect(phase()).toBe('done');
+    expect(document.querySelector('.kioku-review-header-row').textContent).toBe('残り 0 枚');
+    expect(document.querySelector('.kioku-review-gear-button')).toBeNull();
+    expect(document.activeElement.classList.contains('kioku-review-back')).toBe(true);
+    key('Escape');
+    expect(picker()).toBeNull();
+  });
+
+  it('shows every shortcut as the same badge and keeps one primary action in each card state', async () => {
+    const { adapter, plugin } = setup();
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const append = adapter.append.bind(adapter);
+    adapter.append = async (path, data) => { if (path === H) { await gate; throw new Error('EIO'); } return append(path, data); };
+    await startDeck(plugin);
+    const shortcut = (button) => {
+      const badge = button.querySelector('.kioku-review-key');
+      return { key: badge.textContent, hidden: badge.getAttribute('aria-hidden'), keyshortcuts: button.getAttribute('aria-keyshortcuts') };
+    };
+    const skip = () => document.querySelector('.kioku-review-skip');
+    expect(shortcut(skip())).toEqual({ key: 'S', hidden: 'true', keyshortcuts: 'S' });
+    expect(shortcut(document.querySelector('.kioku-review-reveal'))).toEqual({ key: 'Space', hidden: 'true', keyshortcuts: 'Space' });
+    expect(primaries()).toEqual(['mod-cta kioku-review-reveal']);
+    // Quiet skip first (start of the row), the primary last.
+    expect([...document.querySelector('.kioku-review-actions').children].map((button) => button.className))
+      .toEqual(['kioku-review-skip', 'mod-cta kioku-review-reveal']);
+    expect(document.querySelector('.kioku-review-status')).toBeNull();
+
+    key(' ');
+    expect([...document.querySelectorAll('.kioku-review-grade')].map((button) => shortcut(button)))
+      .toEqual(['1', '2', '3', '4'].map((value) => ({ key: value, hidden: 'true', keyshortcuts: value })));
+    expect(shortcut(skip())).toEqual({ key: 'S', hidden: 'true', keyshortcuts: 'S' });
+    expect(primaries()).toEqual(['kioku-review-grade mod-cta']);
+
+    key('2'); await settle();
+    expect(phase()).toBe('saving');
+    expect(document.querySelector('.kioku-review-status .kioku-review-message').textContent).toBe('保存しています…');
+    expect(primaries()).toEqual(['kioku-review-grade mod-cta']);
+
+    release(); await settle();
+    expect(phase()).toBe('failed');
+    const status = document.querySelector('.kioku-review-status');
+    expect(status.querySelector('.kioku-review-message').textContent).toBe('評価を保存できませんでした：記録ファイルに書き込めませんでした（EIO）。');
+    expect(status.querySelector('.kioku-review-retry')).toBe(document.activeElement);
+    // The status row sits between the grades and the quiet skip row.
+    expect([...document.querySelector('.kioku-review').children].map((element) => element.className).slice(-3))
+      .toEqual(['kioku-review-grades', 'kioku-review-status', 'kioku-review-actions']);
+    expect(primaries()).toEqual(['mod-cta kioku-review-retry']);
+    expect([...document.querySelectorAll('.kioku-review-grade, .kioku-review-skip')].every((button) => button.disabled)).toBe(true);
   });
 });
 
