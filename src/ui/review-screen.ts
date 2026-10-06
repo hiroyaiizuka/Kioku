@@ -1,4 +1,4 @@
-import { Component, MarkdownRenderer, Notice, type App } from 'obsidian';
+import { Component, MarkdownRenderer, Notice, setIcon, type App } from 'obsidian';
 import { errorMessage } from '../cards/error-message';
 import { hideEmbeds } from '../review/conceal';
 import { kiokuDay } from '../review/day';
@@ -14,7 +14,6 @@ export interface ReviewContext {
   readonly container: HTMLElement;
   readonly store: ReviewStore;
   readonly settings: KiokuSettings;
-  readonly deckLabel: string;
   readonly cards: readonly ReviewCard[];
   readonly today: KiokuDay;
   readonly now: () => Date;
@@ -114,6 +113,12 @@ export class ReviewScreen {
     this.actions.set(button, run);
     button.addEventListener('click', run);
     return button;
+  }
+
+  /** Every keyboard-operable action shows its key the same way: a badge after the label (not read aloud twice). */
+  private keyBadge(button: HTMLButtonElement, key: string): void {
+    button.createSpan({ cls: 'kioku-review-key', text: key }).setAttribute('aria-hidden', 'true');
+    button.setAttribute('aria-keyshortcuts', key);
   }
 
   private toggleMenu(open: boolean): void {
@@ -224,35 +229,40 @@ export class ReviewScreen {
     screen.dataset.kiokuPhase = this.phase;
     // Keeps keyboard focus inside the modal when no button can take it (e.g. while saving).
     screen.tabIndex = -1;
+    // The modal title already names the deck; this row carries only the count and the menu.
     const headerRow = screen.createDiv({ cls: 'kioku-review-header-row' });
-    const headerLeft = headerRow.createDiv({ cls: 'kioku-review-header-left' });
-    headerLeft.createSpan({ cls: 'kioku-review-deck', text: this.ctx.deckLabel });
-    const headerRight = headerRow.createDiv({ cls: 'kioku-review-header-right' });
-    const gearWrapper = headerRight.createDiv({ cls: 'kioku-review-gear-wrapper' });
-    gearWrapper.addEventListener('click', (evt) => evt.stopPropagation());
-    const gearButton = this.button(gearWrapper, '⚙', 'kioku-review-gear-button',
-      () => this.toggleMenu(!this.menuOpen), !this.current);
-    gearButton.setAttribute('aria-label', 'メニュー');
-    gearButton.setAttribute('aria-expanded', String(this.menuOpen));
+    headerRow.createSpan({ cls: 'kioku-review-remaining',
+      text: `残り ${this.queue.remaining(this.allowance())} 枚` });
+    let gearButton: HTMLButtonElement | null = null;
+    let firstMenuItem: HTMLButtonElement | null = null;
+    // Both menu items need a card, so the done screen has no menu (its own buttons cover going back).
+    if (this.current) {
+      const card = this.current;
+      const gearWrapper = headerRow.createDiv({ cls: 'kioku-review-gear-wrapper' });
+      gearWrapper.addEventListener('click', (evt) => evt.stopPropagation());
+      gearButton = this.button(gearWrapper, '', 'clickable-icon kioku-review-gear-button',
+        () => this.toggleMenu(!this.menuOpen));
+      setIcon(gearButton, 'settings');
+      gearButton.setAttribute('aria-label', 'メニュー');
+      gearButton.setAttribute('aria-expanded', String(this.menuOpen));
+      // Obsidian's own pressed look for an icon button whose menu is open.
+      if (this.menuOpen) gearButton.addClass('is-active');
+      if (this.menuOpen) {
+        const menu = gearWrapper.createDiv({ cls: 'kioku-review-gear-menu' });
+        const blocked = this.phase === 'saving' || this.phase === 'failed';
+        firstMenuItem = this.button(menu, '元のノートを開く', 'kioku-review-menu-item', () => {
+          this.menuOpen = false;
+          this.ctx.openNote(card);
+        }, blocked);
+        this.button(menu, 'デッキに戻る', 'kioku-review-menu-item', () => {
+          this.menuOpen = false;
+          this.ctx.backToPicker();
+        }, blocked);
+      }
+    }
     screen.addEventListener('click', () => {
       if (this.menuOpen) this.toggleMenu(false);
     });
-    let firstMenuItem: HTMLButtonElement | null = null;
-    if (this.menuOpen && this.current) {
-      const card = this.current;
-      const menu = gearWrapper.createDiv({ cls: 'kioku-review-gear-menu' });
-      const blocked = this.phase === 'saving' || this.phase === 'failed';
-      firstMenuItem = this.button(menu, '元のノートを開く', 'kioku-review-menu-item', () => {
-        this.menuOpen = false;
-        this.ctx.openNote(card);
-      }, blocked);
-      this.button(menu, 'デッキに戻る', 'kioku-review-menu-item', () => {
-        this.menuOpen = false;
-        this.ctx.backToPicker();
-      }, blocked);
-    }
-    headerRight.createSpan({ cls: 'kioku-review-remaining',
-      text: `残り ${this.queue.remaining(this.allowance())} 枚` });
     if (this.ctx.store.readOnly) {
       screen.createDiv({ cls: 'kioku-review-readonly', text: '読み取り専用：評価は保存できません（スキップと閲覧だけできます）。' });
     }
@@ -265,39 +275,47 @@ export class ReviewScreen {
     const question = screen.createDiv({ cls: 'kioku-review-question markdown-rendered' });
     this.renderMarkdown(shown ? card.question : hideEmbeds(card.question), question, card.path);
     if (shown) {
-      screen.createEl('hr');
       const answer = screen.createDiv({ cls: 'kioku-review-answer markdown-rendered' });
       this.renderMarkdown(card.answer, answer, card.path);
     }
-    const actions = screen.createDiv({ cls: 'kioku-review-actions' });
     let focus: HTMLButtonElement | null = null;
     const busy = this.phase === 'saving' || this.phase === 'failed';
-    if (this.phase === 'question') {
-      this.button(actions, 'スキップ（S）', 'kioku-review-skip', () => this.skip(), busy);
-      focus = this.button(actions, '答えを表示（Space）', 'mod-cta kioku-review-reveal', () => this.reveal());
-    } else {
+    if (this.phase !== 'question') {
+      const grades = screen.createDiv({ cls: 'kioku-review-grades' });
       const intervals = previewIntervals(this.ctx.store.state.cards[card.id] ?? null, this.ctx.today);
       const disabled = this.phase !== 'answer' || this.ctx.store.readOnly;
       for (const grade of GRADES) {
         const label = intervalLabel(intervals[grade]);
-        const button = this.button(actions, `${GRADE_LABEL[grade]}（${grade}）· ${label}`,
-          `kioku-review-grade${grade === 3 ? ' mod-cta' : ''}`, () => void this.rate(grade), disabled);
+        // One primary per state: 普通 until a save fails, then the retry button.
+        const primary = grade === 3 && this.phase !== 'failed';
+        const button = this.button(grades, '', `kioku-review-grade${primary ? ' mod-cta' : ''}`,
+          () => void this.rate(grade), disabled);
+        button.createSpan({ cls: 'kioku-review-grade-label', text: GRADE_LABEL[grade] });
+        this.keyBadge(button, String(grade));
+        button.createSpan({ cls: 'kioku-review-interval', text: label });
         button.dataset.kiokuGrade = String(grade);
         button.setAttribute('aria-label', `${GRADE_LABEL[grade]}（キー ${grade}）：次回 ${label}後`);
         if (grade === 3 && !disabled) focus = button;
       }
-      this.button(actions, 'スキップ（S）', 'kioku-review-skip', () => this.skip(), busy);
     }
-    const message = screen.createDiv({ cls: 'kioku-review-message' });
-    if (this.phase === 'saving') message.setText('保存しています…');
-    if (this.phase === 'failed') {
-      message.setText(this.failure);
-      focus = this.button(actions, 'もう一度保存する', 'mod-cta kioku-review-retry', () => void this.save());
+    if (busy) {
+      const status = screen.createDiv({ cls: 'kioku-review-status' });
+      status.createDiv({ cls: 'kioku-review-message', text: this.phase === 'saving' ? '保存しています…' : this.failure });
+      if (this.phase === 'failed') {
+        focus = this.button(status, 'もう一度保存する', 'mod-cta kioku-review-retry', () => void this.save());
+      }
+    }
+    // Skip stays quiet and at the start of the row; the primary action sits at the end.
+    const actions = screen.createDiv({ cls: 'kioku-review-actions' });
+    this.keyBadge(this.button(actions, 'スキップ', 'kioku-review-skip', () => this.skip(), busy), 'S');
+    if (this.phase === 'question') {
+      focus = this.button(actions, '答えを表示', 'mod-cta kioku-review-reveal', () => this.reveal());
+      this.keyBadge(focus, 'Space');
     }
     const menuFocus = this.menuFocus;
     this.menuFocus = null;
     const menuTarget = firstMenuItem && !firstMenuItem.disabled ? firstMenuItem : focus ?? gearButton;
-    (menuFocus === 'menu' ? menuTarget : menuFocus === 'gear' ? gearButton : focus ?? screen).focus();
+    ((menuFocus === 'menu' ? menuTarget : menuFocus === 'gear' ? gearButton : focus) ?? screen).focus();
   }
 
   private renderDone(screen: HTMLElement): void {

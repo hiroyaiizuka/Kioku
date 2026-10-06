@@ -226,7 +226,6 @@ export class DeckPickerModal extends Modal {
       container: this.contentEl,
       store: loaded.store,
       settings: loaded.settings,
-      deckLabel: label,
       cards,
       today: loaded.today,
       now: this.options.now,
