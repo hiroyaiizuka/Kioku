@@ -47,6 +47,26 @@ describe('bundled official Obsidian fallback', () => {
       expect(() => readBundledObsidian(executable, checked)).toThrow(/identity\/version/);
     }
   });
+  it('verifies the whole .app bundle and fails closed when a verifier cannot run', () => {
+    const { root, executable, run, calls } = fixture();
+    readBundledObsidian(executable, run);
+    expect(calls[0][0]).toBe('/usr/bin/codesign');
+    expect(calls[0][1].at(-1)).toBe(join(root, 'Obsidian.app'));
+    expect(calls[1]).toEqual(['/usr/bin/plutil', ['-convert', 'json', '-o', '-', join(root, 'Obsidian.app', 'Contents', 'Info.plist')]]);
+    expect(() => readBundledObsidian(executable, () => ({ status: 0, error: new Error('spawn codesign ENOENT') }))).toThrow(/signature/);
+    const plistFails = (command, args) => command === '/usr/bin/codesign' ? run(command, args) : ({ status: 0, error: new Error('spawn plutil ENOENT') });
+    expect(() => readBundledObsidian(executable, plistFails)).toThrow(/Info\.plist/);
+  });
+  it('falls back only when the updates directory is absent, never on other lookup errors', () => {
+    const { root } = fixture();
+    const mustNotFallBack = () => { throw new Error('must not use fallback'); };
+    const realDir = join(root, 'real-updates'); mkdirSync(realDir);
+    const linked = join(root, 'linked-updates'); symlinkSync(realDir, linked);
+    const file = join(root, 'updates-file'); writeFileSync(file, 'not a directory');
+    for (const sourceDir of [linked, file, join(file, 'updates')]) {
+      expect(() => selectAsar(sourceDir, '1.8.7', mustNotFallBack)).toThrow(/app-support directory not found/);
+    }
+  });
   it('rejects linked archive parents and malformed archive metadata', () => {
     const { root, executable, contents, run } = fixture();
     mkdirSync(join(root, 'Linked.app')); symlinkSync(contents, join(root, 'Linked.app', 'Contents'));
@@ -64,6 +84,7 @@ describe('bundled official Obsidian fallback', () => {
     const options = { vault: join(root, 'Kioku テスト用'), sourceDir, minAppVersion: '1.8.7', bundledSource: bundle };
     const result = prepareProfile(root, options);
     expect(result.asar).toBe(join(root, 'Obsidian.app', 'Contents', 'Resources', 'obsidian.asar'));
+    expect(result).toMatchObject({ bundled: true, reused: false, removed: [] });
     expect(result.config.vaults[Object.keys(result.config.vaults)[0]].path).toBe(options.vault);
     writeFileSync(join(root, '.tooling', 'obsidian-profile', 'obsidian-9.0.0.asar'), 'stale');
     expect(() => prepareProfile(root, options)).toThrow(/nothing was deleted/);

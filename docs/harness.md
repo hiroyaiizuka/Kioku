@@ -17,8 +17,10 @@ CI は `npm ci` と `npm run check` を実行し dist を検査用 artifact に�
 
 ## 専用 test-vault
 
+この文書の「test-vault」は専用 Vault を指す。既定は `test-vault/` で、`KIOKU_TEST_VAULT_NAME="Kioku テスト用"` を指定した場合は `Kioku テスト用/` と読み替える（末尾の「同梱 asar による起動と専用 Vault の名前」）。
+
 1. `npm ci && npm run check`
-2. 初回だけ `npm run harness:prepare`。`test-vault/` が存在すれば拒否し、既存 Vault を採用しない。
+2. 初回だけ `npm run harness:prepare`。専用 Vault（`test-vault/` または `Kioku テスト用/`）が存在すれば拒否し、既存 Vault を採用しない。
 3. 手動編集後は専用インスタンスを `npm run harness:quit` で止めて `npm run harness:update`。built plugin 4 files 以外を変えない。
 4. 起動前に `npm run harness:preflight`。source inputs = 再生成した production bytes/imports = dist = installed bytes、marker、ID/version/build ID、enabled plugin が Kioku だけであることを見る。再生成はメモリ上のみで dist を修復しない。
 

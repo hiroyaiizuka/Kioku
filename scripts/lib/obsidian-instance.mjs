@@ -1,4 +1,4 @@
-// Dedicated, concurrent Obsidian instance for test-vault only (tooling; never part of the plugin runtime).
+// Dedicated, concurrent Obsidian instance for the dedicated test Vault only (test-vault or Kioku テスト用) (tooling; never part of the plugin runtime).
 // The user's own Obsidian keeps running: Electron's single-instance lock is per --user-data-dir, so this
 // instance uses a profile inside the project and is identified/terminated only by its recorded PID.
 import { spawn, spawnSync } from 'node:child_process';
@@ -75,7 +75,7 @@ export function selectAsar(sourceDir, minAppVersion, bundledSource) {
     .sort((a, b) => compareVersions(b.version, a.version));
   if (!candidates.length) {
     if (bundledSource) return checkedBundle(bundledSource, minAppVersion);
-    throw new Error('No installed obsidian-<version>.asar found. Update your normal Obsidian once; the bundled installer version is not used.');
+    throw new Error('No installed obsidian-<version>.asar found. Update your normal Obsidian once; the installer version is used only through the verified bundled fallback.');
   }
   const [newest] = candidates;
   if (compareVersions(newest.version, minAppVersion) < 0) {
@@ -94,7 +94,7 @@ function checkedBundle(readBundle, minAppVersion) {
   return bundle;
 }
 
-/** Create the in-project profile, copy (or reuse) the asar, and register only test-vault. */
+/** Create the in-project profile, copy (or reuse) the asar, and register only the dedicated test Vault. */
 export function prepareProfile(root, { vault, sourceDir, minAppVersion, bundledSource, now = Date.now() }) {
   const paths = instancePaths(root);
   ensureDirectory(root, paths.tooling); ensureDirectory(root, paths.profile);
@@ -105,7 +105,7 @@ export function prepareProfile(root, { vault, sourceDir, minAppVersion, bundledS
     }
     const config = obsidianConfig(vault, now);
     atomicWrite(root, join(paths.profile, 'obsidian.json'), `${JSON.stringify(config)}\n`);
-    return { version: asar.version, asar: asar.source, source: asar.source, sha256: asar.sha256, bundled: true, reused: true, removed: [], config };
+    return { version: asar.version, asar: asar.source, source: asar.source, sha256: asar.sha256, bundled: true, reused: false, removed: [], config };
   }
   const destination = join(paths.profile, asar.name);
   const reused = safePath(root, destination, 'file', true) && sha256(safeRead(root, destination)) === asar.sha256;
@@ -436,7 +436,7 @@ async function launchLocked(root, env, system, paths) {
     vault: expected.vault, asar: { version: profile.version, source: profile.source, sha256: profile.sha256, bundled: profile.bundled === true, reused: profile.reused, removed: profile.removed },
     restrictedMode, log: paths.log,
     cliSocket: { path: socket, existedBeforeLaunch: socketExisted, takenOver: socketExisted,
-      note: 'Owned by the dedicated instance while it runs (CLI commands reach test-vault) and removed on harness:quit.' } };
+      note: 'Owned by the dedicated instance while it runs (CLI commands reach the dedicated test Vault) and removed on harness:quit.' } };
 }
 
 /** Terminate only the recorded PID, after proving its command line carries the dedicated profile flag. */
