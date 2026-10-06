@@ -1,12 +1,14 @@
 import { linkSync, mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFixture, cleanup } from '../helpers/fixture.mjs';
 import { harnessPaths, prepareVault, preflight, updateVault } from '../../scripts/lib/harness.mjs';
 
 const roots = [];
 const setup = () => { const root = createFixture(); roots.push(root); return root; };
-afterEach(() => { while (roots.length) cleanup(roots.pop()); });
+// These cases cover the default `test-vault`; harness:prepare runs them while the caller may export KIOKU_TEST_VAULT_NAME.
+beforeEach(() => { vi.stubEnv('KIOKU_TEST_VAULT_NAME', undefined); });
+afterEach(() => { vi.unstubAllEnvs(); while (roots.length) cleanup(roots.pop()); });
 
 describe('dedicated vault harness', () => {
   it('prepares only a missing dedicated vault and refuses every existing vault', () => {
