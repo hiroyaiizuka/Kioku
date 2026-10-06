@@ -5,6 +5,20 @@ import { JSDOM } from 'jsdom';
 import vm from 'node:vm';
 import { join } from 'node:path';
 
+/** Scope dispatch precedes element capture, as in native Obsidian's keymap. */
+export class MockScope {
+  constructor(parent) { this.parent = parent; this.handlers = []; }
+  register(modifiers, key, func) { const handler = { modifiers, key, func }; this.handlers.push(handler); return handler; }
+  unregister(handler) { this.handlers = this.handlers.filter(item => item !== handler); }
+  handleKey(event) {
+    for (const handler of this.handlers) {
+      if (handler.key !== event.key || (handler.modifiers?.length === 0 && (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey))) continue;
+      return handler.func(event);
+    }
+    return this.parent?.handleKey(event);
+  }
+}
+
 export class MockModal {
   constructor(app) {
     this.app = app;
@@ -13,15 +27,19 @@ export class MockModal {
     this.contentEl = document.createElement('div');
     this.modalEl.append(this.contentEl);
     this.containerEl.append(this.modalEl);
-    // Stands in for the Modal scope's Escape handler (bubble phase, after Kioku's capture listener).
-    this.containerEl.addEventListener('keydown', (event) => { if (event.key === 'Escape') this.close(); });
+    this.scope = new MockScope();
+    this.scope.register([], 'Escape', () => { this.close(); return false; });
+    this.scopeListener = (event) => {
+      if (!this.containerEl.contains(event.target)) return;
+      if (this.scope.handleKey(event) === false) { event.preventDefault(); event.stopPropagation(); }
+    };
   }
   setTitle(text) {
     this.titleEl ??= this.modalEl.insertBefore(document.createElement('h2'), this.modalEl.firstChild);
     this.titleEl.textContent = text;
   }
-  open() { if (!this.containerEl.isConnected) { document.body.append(this.containerEl); this.onOpen(); } }
-  close() { if (this.containerEl.isConnected) { this.onClose(); this.containerEl.remove(); } }
+  open() { if (!this.containerEl.isConnected) { document.body.append(this.containerEl); document.addEventListener('keydown', this.scopeListener, true); this.onOpen(); } }
+  close() { if (this.containerEl.isConnected) { this.onClose(); document.removeEventListener('keydown', this.scopeListener, true); this.containerEl.remove(); } }
 }
 
 /** Public Component lifecycle; every instance is kept so tests can check that all were unloaded. */
@@ -171,7 +189,7 @@ export async function compilePlugin(source, notices) {
     addCommand(command) { this.commands.push(command); return command; }
     registerEvent(ref) { this.events.push(ref); }
   }
-  const obsidian = { Plugin: MockPlugin, Modal: MockModal, MarkdownView: MockMarkdownView, Notice: MockNotice, TFile: MockTFile,
+  const obsidian = { Plugin: MockPlugin, Modal: MockModal, Scope: MockScope, MarkdownView: MockMarkdownView, Notice: MockNotice, TFile: MockTFile,
     Component: MockComponent, MarkdownRenderer: MockMarkdownRenderer, parseFrontMatterTags, PluginSettingTab: MockPluginSettingTab,
     Setting: MockSetting, requestUrl };
   const module = { exports: {} };
