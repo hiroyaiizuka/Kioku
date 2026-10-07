@@ -5,9 +5,9 @@ import { errorMessage } from '../cards/error-message';
 import type { KiokuDay, KiokuStateV1, ReviewEvent } from '../review/types';
 import { STORE_REASONS, fileUnreadable, folderChangeRefused, historyCorrupt, historyMissing, invalidEvent, historyTruncated, historyUnknownVersion, saveFailed,
   stateUnknownSchema, stateUnreadable } from './reasons';
-import { HISTORY_FILE, STATE_BACKUP_FILE, STATE_FILE, appendTarget, brokenFileName, parseHistory, parseState,
+import { HISTORY_FILE, STATE_BACKUP_FILE, STATE_FILE, appendTarget, brokenFileName, lastRatings, parseHistory, parseState,
   missingAppliedHistory, replayHistory, serializeEvent, serializeState, validateEvent, type HistoryFile,
-  type HistoryParse } from './schema';
+  type HistoryParse, type LastRating } from './schema';
 
 /** The subset of Obsidian's public `DataAdapter` that Kioku uses (paths are vault-relative). */
 export interface StoreAdapter {
@@ -245,6 +245,11 @@ export class ReviewStore {
   applyExtraNew(day: KiokuDay, count: number): void {
     const today = this.state.today?.day === day ? this.state.today : { day, newIntroduced: 0, extraNew: 0 };
     this.state = { ...this.state, today: { ...today, extraNew: today.extraNew + count } };
+  }
+
+  /** Each card's last rating in the history files read by `load` (and appended by `record`). */
+  lastRatings(): Map<string, LastRating> {
+    return lastRatings([...this.historyFiles].map(([name, parse]) => ({ name, parse })));
   }
 
   get persistsExtraNew(): boolean {

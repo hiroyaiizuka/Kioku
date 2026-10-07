@@ -1,4 +1,4 @@
-import type { CardSchedule, CardId, KiokuDay, TodayCounter } from './types';
+import type { CardSchedule, CardId, Grade, KiokuDay, TodayCounter } from './types';
 
 /** One unique card as presented in a session (duplicates already resolved by the deck index). */
 export interface ReviewCard {
@@ -23,24 +23,24 @@ export function newAllowance(counter: TodayCounter | null, today: KiokuDay, newP
   return Math.max(0, newPerDay + (current?.extraNew ?? 0) - (current?.newIntroduced ?? 0));
 }
 
-export const isLearning = (schedule: CardSchedule): boolean =>
-  schedule.phase === 'learning' || schedule.phase === 'relearning';
+/** The grade and due day of a card's last rating, from the history (`ReviewStore#lastRatings`). */
+export type RatingLookup = (id: CardId) => { readonly grade: Grade; readonly dueDay: KiokuDay } | undefined;
 
 /**
- * Today's work of a deck in three disjoint columns (docs/m2-design.md §4.3): `learning` and `due`
- * split the due cards by FSRS phase, so new + learning + due is what a session can show today
- * (before the new-card limit).
+ * Today's work of a deck in three disjoint columns (docs/m2-design.md §13): `learning` and `due`
+ * split the due cards by their last rating, so new + learning + due is what a session can show
+ * today (before the new-card limit).
  */
 export interface DeckCounts {
   readonly new: number;
-  /** Due cards in the learning or relearning phase. */
+  /** Due cards whose last rating, the one that set the current due day, was again (1). */
   readonly learning: number;
-  /** Due cards in any other phase (review). */
+  /** The other due cards. */
   readonly due: number;
   readonly total: number;
 }
 
-export function countCards(cards: Iterable<ReviewCard>, lookup: ScheduleLookup, today: KiokuDay): DeckCounts {
+export function countCards(cards: Iterable<ReviewCard>, lookup: ScheduleLookup, lastRating: RatingLookup, today: KiokuDay): DeckCounts {
   let fresh = 0;
   let learning = 0;
   let due = 0;
@@ -50,7 +50,9 @@ export function countCards(cards: Iterable<ReviewCard>, lookup: ScheduleLookup, 
     const schedule = lookup(card.id);
     if (!schedule) fresh += 1;
     else if (isDue(schedule, today)) {
-      if (isLearning(schedule)) learning += 1;
+      const last = lastRating(card.id);
+      // A rating that did not set this due day (state.json newer than the history) says nothing.
+      if (last?.grade === 1 && last.dueDay === schedule.dueDay) learning += 1;
       else due += 1;
     }
   }
