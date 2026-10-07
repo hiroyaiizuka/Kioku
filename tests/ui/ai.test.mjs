@@ -255,6 +255,52 @@ describe('AI settings tab', () => {
     expect(network.calls).toEqual([]);
   });
 
+  it('changing the model and changing it back asks for consent again; nothing is sent until re-consent and 送信して作る (LEV-329)', async () => {
+    const model = 'gemma4:31b-cloud';
+    const consent = `local|ollama|http://localhost:11434|${model}`;
+    const { plugin } = open({ ai: ai({ judge: 'none', providers: { local: { model, consent } } }) });
+    tab(plugin); await flush();
+    const name = '外部への送信に同意する（localhost:11434）';
+    expect(field(name).querySelector('input').checked).toBe(true);
+    expect(field(name).querySelector('.setting-item-description').textContent).toContain('元の値に戻しても同意し直しが必要です');
+    const type = (value) => {
+      const input = field('生成：モデル名').querySelector('input');
+      input.value = value; input.dispatchEvent(new window.Event('input')); input.dispatchEvent(new window.Event('change'));
+    };
+    type('gemma4:27b-cloud'); await flush();
+    expect(plugin.data.ai.providers.local.consent).toBeNull();
+    type(model); await flush();
+    expect(plugin.data.ai.providers.local).toMatchObject({ model, consent: null });
+    expect(field(name).querySelector('input').checked).toBe(false);
+    await extract(plugin);
+    expect(section().querySelector('.kioku-ai-guidance').textContent).toContain('外部送信に同意していません');
+    expect(section().querySelector('.kioku-ai-run')).toBeNull();
+    document.querySelector('.kioku-candidate-close').click();
+    // Re-consent: the popup then shows the pre-send preview (E2) and still sends nothing until the click.
+    const toggle = field(name).querySelector('input');
+    toggle.checked = true; toggle.dispatchEvent(new window.Event('change')); await flush();
+    expect(plugin.data.ai.providers.local.consent).toBe(consent);
+    await extract(plugin);
+    expect(section().querySelector('.kioku-ai-preview').textContent).toContain('外部 localhost:11434');
+    expect(section().querySelector('.kioku-ai-run').textContent).toBe('送信して作る');
+    expect(network.calls).toEqual([]);
+  });
+
+  it('a revert typed while the change is still being saved does not bring consent back', async () => {
+    const model = 'gemma4:31b-cloud';
+    const { plugin } = open({ ai: ai({ judge: 'none', providers: { local: { model, consent: `local|ollama|http://localhost:11434|${model}` } } }) });
+    tab(plugin); await flush();
+    const save = plugin.saveData.bind(plugin);
+    plugin.saveData = (data) => new Promise((resolve) => setTimeout(resolve, 50)).then(() => save(data));
+    const input = field('生成：モデル名').querySelector('input');
+    // Two keystrokes (add a character, delete it) without waiting for the first save.
+    input.value = `${model}x`; input.dispatchEvent(new window.Event('input'));
+    input.value = model; input.dispatchEvent(new window.Event('input'));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(plugin.saved.map((data) => data.ai.providers.local.model)).toEqual([`${model}x`, model]);
+    expect(plugin.data.ai.providers.local).toMatchObject({ model, consent: null });
+  });
+
   it('refuses a base URL with a path and explains why, keeping the saved one', async () => {
     const { plugin } = open({ ai: ai() });
     tab(plugin); await flush();

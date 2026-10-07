@@ -10,7 +10,10 @@ export interface LocalProviderSettings {
   readonly baseUrl: string;
   /** Generation model; empty = generation not configured (no default model, Q1). */
   readonly model: string;
-  /** Consent fingerprint (`consentFingerprint`) the user agreed to, or null. Needed only when external. */
+  /**
+   * Consent fingerprint (`consentFingerprint`) the user agreed to, or null. Needed only when external.
+   * Only a value equal to the current fingerprint survives parsing (see `parseAiSettings`).
+   */
   readonly consent: string | null;
 }
 
@@ -61,7 +64,11 @@ export const DEFAULT_AI_SETTINGS: AiSettings = {
 const record = (value: unknown): Record<string, unknown> =>
   (typeof value === 'object' && value !== null && !Array.isArray(value) ? value : {}) as Record<string, unknown>;
 const text = (value: unknown, fallback: string): string => (typeof value === 'string' ? value.trim() : fallback);
-const consentOf = (value: unknown): string | null => (typeof value === 'string' && value ? value : null);
+/**
+ * A stored consent counts only while it equals the current fingerprint; anything else (another
+ * destination or model, a non-string from a hand-edited data.json) reads as null.
+ */
+const consentFor = (value: unknown, fingerprint: string): string | null => (value === fingerprint ? fingerprint : null);
 const seconds = (value: unknown, fallback: number): number =>
   (Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 600 ? value as number : fallback);
 
@@ -82,7 +89,14 @@ export function normalizeBaseUrl(input: string): string | null {
   return `${url.protocol}//${url.host}`;
 }
 
-/** Reads the `ai` section leniently; anything missing or invalid falls back to AI off / defaults. */
+/**
+ * Reads the `ai` section leniently; anything missing or invalid falls back to AI off / defaults.
+ *
+ * A consent whose fingerprint no longer matches is dropped here, not just ignored. Every save goes
+ * through this parse (`SettingsStore.update`), so changing the destination, server or model writes
+ * `consent: null` and changing it back cannot bring the old consent back (§7.1, LEV-329). This also
+ * clears consents left stale by earlier versions, which kept them after such a change.
+ */
 export function parseAiSettings(raw: unknown): AiSettings {
   const value = record(raw);
   const providers = record(value.providers);
@@ -90,14 +104,16 @@ export function parseAiSettings(raw: unknown): AiSettings {
   const jev = record(providers.jev);
   const timeouts = record(value.timeouts);
   const server: LocalServer = local.server === 'llamacpp' || local.server === 'lmstudio' ? local.server : 'ollama';
-  const baseUrl = typeof local.baseUrl === 'string' ? normalizeBaseUrl(local.baseUrl) : null;
+  const baseUrl = (typeof local.baseUrl === 'string' ? normalizeBaseUrl(local.baseUrl) : null) ?? LOCAL_DEFAULT_URLS[server];
+  const localModel = text(local.model, '');
+  const jevModel = text(jev.model, '') || JEV_DEFAULT_MODEL;
   return {
     enabled: value.enabled === true,
     judge: value.judge === 'none' ? 'none' : 'jev',
     generator: 'local',
     providers: {
-      local: { server, baseUrl: baseUrl ?? LOCAL_DEFAULT_URLS[server], model: text(local.model, ''), consent: consentOf(local.consent) },
-      jev: { apiKey: text(jev.apiKey, ''), model: text(jev.model, '') || JEV_DEFAULT_MODEL, consent: consentOf(jev.consent) },
+      local: { server, baseUrl, model: localModel, consent: consentFor(local.consent, localFingerprint(server, baseUrl, localModel)) },
+      jev: { apiKey: text(jev.apiKey, ''), model: jevModel, consent: consentFor(jev.consent, jevFingerprint(jevModel)) },
     },
     timeouts: {
       judgeSeconds: seconds(timeouts.judgeSeconds, DEFAULT_AI_SETTINGS.timeouts.judgeSeconds),
@@ -142,14 +158,18 @@ export function localIsExternal(local: LocalProviderSettings): boolean {
   return !isLoopbackHost(hostname) || isCloudModel(local.model);
 }
 
+const localFingerprint = (server: LocalServer, baseUrl: string, model: string): string => `local|${server}|${baseUrl}|${model}`;
+const jevFingerprint = (model: string): string => `jev|${JEV_HOST}|${model}`;
+
 /**
- * What a consent covers. Changing the provider's destination or model changes the fingerprint,
- * so consent must be given again (§7.1).
+ * What a consent covers. Changing the provider's destination, server or model changes the
+ * fingerprint, so consent must be given again (§7.1) — also after changing it back, because the
+ * save of the change already dropped the old consent (`parseAiSettings`).
  */
 export function consentFingerprint(provider: 'local' | 'jev', settings: AiSettings): string {
-  if (provider === 'jev') return `jev|${JEV_HOST}|${settings.providers.jev.model}`;
+  if (provider === 'jev') return jevFingerprint(settings.providers.jev.model);
   const { server, baseUrl, model } = settings.providers.local;
-  return `local|${server}|${baseUrl}|${model}`;
+  return localFingerprint(server, baseUrl, model);
 }
 
 export const hasConsent = (provider: 'local' | 'jev', settings: AiSettings): boolean =>

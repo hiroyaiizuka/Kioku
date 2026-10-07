@@ -97,7 +97,7 @@ export function renderAiSettings(containerEl: HTMLElement, section: AiSettingsSe
     const host = hostOf(local.baseUrl);
     new Setting(containerEl)
       .setName(`外部への送信に同意する（${host}）`)
-      .setDesc(`${cloud ? 'このモデルは名前が cloud で終わるため、外部（Ollama の cloud モデルなど）で実行されるものとして扱います。' : 'この接続先はこのパソコンの外です。'}同意するまで送信しません。接続先・サーバー・モデルを変えると同意し直しが必要です。`)
+      .setDesc(`${cloud ? 'このモデルは名前が cloud で終わるため、外部（Ollama の cloud モデルなど）で実行されるものとして扱います。' : 'この接続先はこのパソコンの外です。'}同意するまで送信しません。接続先・サーバー・モデルを変えると同意は取り消され、元の値に戻しても同意し直しが必要です。`)
       .addToggle((toggle) => toggle.setValue(hasConsent('local', ai)).onChange(guarded(async (value: boolean) => {
         await save(withLocal((latest) => ({ consent: value ? consentFingerprint('local', latest) : null })));
         redraw();

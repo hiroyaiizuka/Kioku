@@ -52,6 +52,8 @@ export type SettingsPatch = Partial<Omit<KiokuSettings, 'schemaVersion'>>;
 /** Lazily loaded settings (no data.json read at startup), saved through the plugin's saveData. */
 export class SettingsStore {
   private current: Promise<KiokuSettings> | null = null;
+  /** Saves run one at a time (see `update`). */
+  private writes: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly loadData: () => Promise<unknown>,
     private readonly saveData: (data: KiokuSettings) => Promise<void>) {}
@@ -72,10 +74,20 @@ export class SettingsStore {
     return this.current;
   }
 
-  async update(patch: SettingsPatch): Promise<KiokuSettings> {
-    const next = parseSettings({ ...(await this.get()), ...patch });
-    await this.saveData(next);
-    this.current = Promise.resolve(next);
-    return next;
+  /**
+   * Saves one after another. A function patch is applied to the settings as left by the previous
+   * save, so a quick change-and-revert (one save per keystroke) can never be built on settings read
+   * before the change was saved — which would bring a revoked consent back (LEV-329).
+   */
+  update(patch: SettingsPatch | ((latest: KiokuSettings) => SettingsPatch)): Promise<KiokuSettings> {
+    const run = this.writes.then(async () => {
+      const latest = await this.get();
+      const next = parseSettings({ ...latest, ...(typeof patch === 'function' ? patch(latest) : patch) });
+      await this.saveData(next);
+      this.current = Promise.resolve(next);
+      return next;
+    });
+    this.writes = run.catch(() => undefined);
+    return run;
   }
 }
