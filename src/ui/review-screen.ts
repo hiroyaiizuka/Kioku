@@ -313,7 +313,7 @@ export class ReviewScreen {
     progress.createSpan({ cls: 'kioku-review-progress-separator' }).setAttribute('aria-hidden', 'true');
     const count = progress.createSpan({ cls: 'kioku-review-progress-count', text: `${position}/${total}` });
     count.setAttribute('aria-hidden', 'true');
-    setIcon(count.createSpan({ cls: 'kioku-review-progress-icon' }), 'gallery-vertical-end');
+    setIcon(count.createSpan({ cls: 'kioku-review-progress-icon' }), 'credit-card');
     const end = header.createDiv({ cls: 'kioku-modal-header-end' });
     let gearButton: HTMLButtonElement | null = null;
     if (this.current && this.phase !== 'done') {

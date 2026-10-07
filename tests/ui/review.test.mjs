@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MockComponent, compilePlugin, createApp, installDom, renders } from '../helpers/obsidian-mock.mjs';
 import { FakeAdapter } from '../helpers/fake-adapter.mjs';
+import { event } from '../helpers/events.mjs';
 
 const NOTES = {
   '学習/生理.md': '#kioku/医学/生理\nQ: 心拍数は？\nA: 約60 ^kioku-aaaaaaaaaa\n\nQ: 図 ![[heart.png]] は？\nA: 心臓 ^kioku-bbbbbbbbbb\n',
@@ -67,6 +68,7 @@ async function startDeck(plugin, name = '#kioku') { await openPicker(plugin); ro
 const schedule = (phase, dueDay, lastReviewDay) => ({ phase, dueDay, stability: 2, difficulty: 5, reps: 2, lapses: phase === 'relearning' ? 1 : 0, lastReviewDay });
 const stateWith = (cards) => ({ [S]: JSON.stringify({ schemaVersion: 1, cards, today: null, applied: {} }) });
 const progress = () => document.querySelector('.kioku-review-progress-count')?.textContent;
+const heldBack = () => document.querySelector('.kioku-deck-later')?.textContent;
 const moreMenu = () => [...document.querySelectorAll('.menu .menu-item')];
 
 describe('deck picker (ribbon)', () => {
@@ -102,6 +104,8 @@ describe('deck picker (ribbon)', () => {
       .toEqual(['clickable-icon kioku-deck-more', 'kioku-modal-close-space']);
     expect(picker().textContent).not.toMatch(/今日の新規|フォルダに保存|全デッキ|すべて/);
     expect(picker().querySelectorAll('.kioku-deck-allowance, .kioku-deck-data-note, .kioku-deck-footer, .kioku-deck-picker-close')).toHaveLength(0);
+    // Nothing is held back by the default limit (20): no line about it.
+    expect(heldBack()).toBeUndefined();
     expect(document.activeElement).toBe(document.querySelector('.kioku-deck-row'));
   });
 
@@ -156,15 +160,16 @@ describe('deck picker (ribbon)', () => {
     expect(rows().map((item) => item.split(' | ')[0])).toEqual(['#kioku', '#kioku/医学', '#kioku/医学/生理', '#kioku/英語']);
   });
 
-  it('counts learning / relearning cards due today as 学習中, apart from 復習; the columns add up to the session', async () => {
-    const kioku = stateWith({
-      'kioku-aaaaaaaaaa': schedule('learning', '2026-10-02', '2026-10-01'),
-      'kioku-bbbbbbbbbb': schedule('relearning', '2026-09-30', '2026-09-29'),
-      'kioku-cccccccccc': schedule('review', '2026-10-01', '2026-09-20'),
-      // Not due yet: in no column.
-      'kioku-dddddddddd': schedule('learning', '2026-10-05', '2026-10-01'),
-    });
-    const { adapter, plugin } = setup({ kioku });
+  it('counts due cards last rated もう一度 as 学習中, apart from 復習; the columns add up to the session', async () => {
+    const rated = (card, grade, day, dueDay) => ({ ...event(card, grade + day.slice(5).replace('-', '')), grade, day, dueDay });
+    const history = [
+      rated('aaaaaaaaaa', 1, '2026-10-01', '2026-10-02'),
+      rated('bbbbbbbbbb', 1, '2026-09-29', '2026-09-30'),
+      rated('cccccccccc', 3, '2026-09-20', '2026-10-01'),
+      // Again, but not due yet: in no column.
+      rated('dddddddddd', 1, '2026-10-01', '2026-10-05'),
+    ];
+    const { adapter, plugin } = setup({ kioku: { [H]: history.map((line) => `${JSON.stringify(line)}\n`).join('') } });
     await openPicker(plugin);
     expect(rows()).toEqual([
       '#kioku | 新規 0 · 学習中 2 · 復習 1',
@@ -176,9 +181,37 @@ describe('deck picker (ribbon)', () => {
     expect(progress()).toBe('1/3');
     const seen = [];
     while (phase() === 'question') { seen.push(question()); key('s'); }
-    // Oldest due day first (relearning 09-30, review 10-01, learning 10-02).
+    // Oldest due day first (b 09-30, c 10-01, a 10-02).
     expect(seen).toEqual(['図 [[heart.png]] は？', 'apple', '心拍数は？']);
     expect(adapter.writes()).toEqual([]);
+  });
+
+  it('puts a card rated もう一度 into 学習中 once it is due the next day; the FSRS phase is not used', async () => {
+    const { adapter, plugin } = setup({ kioku: stateWith({ 'kioku-cccccccccc': schedule('relearning', '2026-10-02', '2026-10-01') }) });
+    await openPicker(plugin);
+    // A hand-made learning phase without a rating in the history is 復習.
+    expect(row('#英語').getAttribute('aria-label')).toBe('#英語：新規 1 枚、学習中 0 枚、復習 1 枚');
+    row('#kioku').click(); await settle();
+    // The due card first (apple), then the first new card in note order (both).
+    while (question() !== 'both') { key('s'); }
+    key(' '); key('1'); await settle();
+    expect(historyLines(adapter).map((line) => [line.cardId, line.grade, line.dueDay])).toEqual([['kioku-dddddddddd', 1, '2026-10-03']]);
+    backToPicker(); await settle();
+    // Not due today: in no column yet.
+    expect(row('#kioku').getAttribute('aria-label')).toBe('#kioku：新規 2 枚、学習中 0 枚、復習 1 枚');
+    picker().querySelector('.modal-header-button').click();
+    vi.setSystemTime(new Date(2026, 9, 3, 10, 0));
+    await openPicker(plugin);
+    expect(row('#kioku').getAttribute('aria-label')).toBe('#kioku：新規 2 枚、学習中 1 枚、復習 1 枚');
+    expect(rows()).toContain('#医学 | 新規 2 · 学習中 1 · 復習 0');
+    // Rated again with 普通: back to 復習 on its next due day.
+    row('#医学').click(); await settle();
+    expect(question()).toBe('both');
+    key(' '); key('3'); await settle();
+    const next = historyLines(adapter).at(-1);
+    vi.setSystemTime(new Date(2026, 9, 3 + Number(next.scheduledDays), 10, 0));
+    backToPicker(); await settle();
+    expect(rows()).toContain('#医学 | 新規 2 · 学習中 0 · 復習 1');
   });
 
   it('⋯ offers extraction, the status popup and where the records are kept', async () => {
@@ -290,7 +323,8 @@ describe('review session', () => {
     vi.setSystemTime(new Date(2026, 9, 3, 9, 0));
     const second = setup({ kioku: files });
     await openPicker(second.plugin);
-    expect(rows()).toContain('#英語 | 新規 1 · 学習中 0 · 復習 1');
+    // Rated もう一度, so it is 学習中 on its due day.
+    expect(rows()).toContain('#英語 | 新規 1 · 学習中 1 · 復習 0');
   });
 });
 
@@ -428,7 +462,7 @@ describe('review screen layout', () => {
     expect(pill.textContent).toBe('#英語1/2');
     expect(pill.getAttribute('aria-label')).toBe('#英語：1 / 2 枚');
     expect([pill.getAttribute('role'), pill.getAttribute('aria-level')]).toEqual(['heading', '2']);
-    expect(pill.querySelector('.kioku-review-progress-icon').dataset.icon).toBe('gallery-vertical-end');
+    expect(pill.querySelector('.kioku-review-progress-icon').dataset.icon).toBe('credit-card');
     expect(header.textContent).not.toMatch(/残り/);
     const end = header.querySelector('.kioku-modal-header-end');
     expect(classes(end)).toEqual(['kioku-review-gear-wrapper', 'kioku-modal-close-space']);
@@ -702,6 +736,9 @@ describe('new-card limit', () => {
     expect(row('#kioku').dataset.kiokuLater).toBe('2');
     expect(row('#kioku').getAttribute('aria-label'))
       .toBe('#kioku：新規 4 枚、学習中 0 枚、復習 0 枚、今日の新規は残り 2 枚（残りは明日以降）');
+    // One quiet line below the list counts each held-back card once, though it is in several decks.
+    expect(heldBack()).toBe('新規は残り 2 枚が明日以降');
+    expect(document.querySelector('.kioku-deck-list + .kioku-deck-notes > p:first-child')).toBe(document.querySelector('.kioku-deck-later'));
     row('#kioku').click(); await settle();
     for (let index = 0; index < 2; index += 1) { key(' '); key('3'); await settle(); }
     expect(phase()).toBe('done');
@@ -722,11 +759,13 @@ describe('new-card limit', () => {
     await openPicker(vault.plugin);
     // Allowance 10 covers the 4 new cards.
     expect(row('#kioku').dataset.kiokuLater).toBeUndefined();
+    expect(heldBack()).toBeUndefined();
     picker().querySelector('.modal-header-button').click();
     vi.setSystemTime(new Date(2026, 9, 3, 4, 0));
     vault = setup({ kioku, settings: { newPerDay: 2 } });
     await openPicker(vault.plugin);
     expect(row('#kioku').dataset.kiokuLater).toBe('2');
+    expect(heldBack()).toBe('新規は残り 2 枚が明日以降');
   });
 });
 
@@ -764,6 +803,7 @@ describe('review edge cases', () => {
     vi.setSystemTime(new Date(2026, 9, 3, 9, 0));
     backToPicker(); await settle();
     expect(row('#kioku').dataset.kiokuLater).toBe('0');
+    expect(heldBack()).toBe('新規は残り 4 枚が明日以降');
     expect(adapter.writes()).toEqual([]);
   });
 

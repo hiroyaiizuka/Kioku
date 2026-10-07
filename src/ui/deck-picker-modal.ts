@@ -3,7 +3,7 @@ import { errorMessage } from '../cards/error-message';
 import { buildDeckIndex, type DeckIndex } from '../decks/index';
 import { scanVault, type ScanResult } from '../decks/scan';
 import { kiokuDay } from '../review/day';
-import { countCards, newAllowance, type ReviewCard } from '../review/queue';
+import { countCards, newAllowance, type RatingLookup, type ReviewCard } from '../review/queue';
 import type { CardSchedule, KiokuDay, KiokuSettings } from '../review/types';
 import { STORE_REASONS, notIndexed } from '../store/reasons';
 import { ReviewStore } from '../store/review-store';
@@ -36,6 +36,8 @@ const COLUMNS = [
 
 /** Only reachable when the allowance is finite (more new cards than it). */
 const formatLater = (allowance: number): string => `今日の新規は残り ${allowance} 枚（残りは明日以降）`;
+/** Below the list, only while today's limit holds new cards back (across all decks). */
+const formatHeldBack = (count: number): string => `新規は残り ${count} 枚が明日以降`;
 
 const dataFolderNote = (folder: string): string =>
   `学習の記録と日程は Vault の「${folder}」フォルダに保存されます（最初の評価で作成）。このフォルダを削除・移動すると記録が失われます。`;
@@ -126,6 +128,8 @@ export class DeckPickerModal extends Modal {
     if (!loaded) return;
     const { settings, store, index, today, scan } = loaded;
     const lookup = (id: string): CardSchedule | undefined => store.state.cards[id];
+    const ratings = store.lastRatings();
+    const lastRating: RatingLookup = (id) => ratings.get(id);
     const allowance = newAllowance(store.state.today, today, settings.newPerDay);
     const body = this.renderFrame();
     if (store.problem) this.renderProblem(body, store);
@@ -142,7 +146,7 @@ export class DeckPickerModal extends Modal {
     for (const deck of index.listed) {
       const label = `#${single !== undefined && deck.key.startsWith(`${single}/`) ? deck.label.slice(single.length + 1) : deck.label}`;
       const cards = [...deck.cardIds].map((id) => index.cards.get(id)).filter((card): card is ReviewCard => card !== undefined);
-      const counts = countCards(cards, lookup, today);
+      const counts = countCards(cards, lookup, lastRating, today);
       const item = list.createEl('button', { cls: 'kioku-deck-row' });
       item.dataset.kiokuDeck = deck.key;
       item.createSpan({ cls: 'kioku-deck-name', text: label });
@@ -156,6 +160,8 @@ export class DeckPickerModal extends Modal {
       item.addEventListener('click', () => this.startReview(label, cards));
     }
     const notes = body.createDiv({ cls: 'kioku-deck-notes' });
+    const heldBack = countCards(index.cards.values(), lookup, lastRating, today).new - allowance;
+    if (heldBack > 0) notes.createEl('p', { cls: 'kioku-deck-later', text: formatHeldBack(heldBack) });
     const tagList = settings.triggerTags.map((tag) => `#${tag}`).join('、');
     if (!index.all.size) {
       notes.createEl('p', { cls: 'kioku-deck-empty',

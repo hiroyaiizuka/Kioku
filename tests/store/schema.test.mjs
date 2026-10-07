@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { emptyState, missingAppliedHistory, parseHistory, parseState, replayHistory, serializeEvent, serializeState } from '../../src/store/schema.ts';
+import { emptyState, lastRatings, missingAppliedHistory, parseHistory, parseState, replayHistory, serializeEvent, serializeState } from '../../src/store/schema.ts';
 import { DEFAULT_SETTINGS, SettingsStore, normalizeDataFolder, parseSettings } from '../../src/store/settings.ts';
 import { DEFAULT_AI_SETTINGS } from '../../src/ai/settings.ts';
 import { event } from '../helpers/events.mjs';
@@ -68,6 +68,19 @@ describe('replay from history (history is the source of truth)', () => {
     const result = replayHistory(behind, [file('history-2026.jsonl', lines(A1, B1, sameTime))]);
     expect(result).toMatchObject({ fullReplay: false, applied: 2 });
     expect(result.state.cards['kioku-a'].dueDay).toBe('2026-10-19');
+  });
+
+  it('reads each card\'s last rating across year files; a repeated eventId counts once', () => {
+    const again = { ...event('a', '3', { day: '2026-12-30', dueDay: '2026-12-31', phaseBefore: 'review', reps: 3 }), grade: 1 };
+    const retried = { ...again, grade: 4 }; // same eventId: a retry, never a new rating
+    const bAgain = { ...event('b', '0', { dueDay: '2026-10-03' }), grade: 1 };
+    // Passed out of order: the 2027 file is still read after the 2026 one.
+    const ratings = lastRatings([file('history-2027.jsonl', lines(B1)), file('history-2026.jsonl', lines(bAgain, A1, A2, again, retried))]);
+    expect(Object.fromEntries(ratings)).toEqual({
+      'kioku-a': { grade: 1, dueDay: '2026-12-31' },
+      'kioku-b': { grade: 3, dueDay: '2026-10-04' },
+    });
+    expect(lastRatings([]).size).toBe(0);
   });
 
   it('applies a retried (duplicated) eventId only once, before or after the position', () => {

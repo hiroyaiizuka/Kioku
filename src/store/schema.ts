@@ -243,3 +243,24 @@ export function replayHistory(base: KiokuStateV1 | null, files: readonly History
   else if (full && base?.today && (!draft.today || base.today.day > draft.today.day)) draft.today = base.today;
   return { state: { schemaVersion: 1, cards: draft.cards, today: draft.today, applied: draft.applied }, fullReplay: full && base !== null, applied };
 }
+
+/** The rating that set a card's current schedule (docs/m2-design.md §13). */
+export type LastRating = Pick<ReviewEvent, 'grade' | 'dueDay'>;
+
+/**
+ * Each card's last rating in replay order (files by year, then line; a repeated eventId counts
+ * once, as in `replayHistory`). state.json keeps no grade, so this is read from the history files.
+ */
+export function lastRatings(files: readonly HistoryFile[]): Map<string, LastRating> {
+  const sorted = [...files].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const seen = new Set<string>();
+  const last = new Map<string, LastRating>();
+  for (const file of sorted) {
+    for (const { event } of file.parse.entries) {
+      if (seen.has(event.eventId)) continue;
+      seen.add(event.eventId);
+      last.set(event.cardId, { grade: event.grade, dueDay: event.dueDay });
+    }
+  }
+  return last;
+}

@@ -31,18 +31,30 @@ describe('session queue', () => {
     for (let card = queue.next(10); card; card = queue.next(10)) { seen.push(card.id); queue.markRated(card.id); }
     expect(seen).toEqual(['c', 'b', 'a', 'e', 'f']);
     expect(queue.rated).toBe(5);
-    expect(countCards(cards.slice(0, 6), lookup, TODAY)).toEqual({ new: 3, learning: 0, due: 2, total: 6 });
+    expect(countCards(cards.slice(0, 6), lookup, () => undefined, TODAY)).toEqual({ new: 3, learning: 0, due: 2, total: 6 });
   });
 
-  it('splits due cards into 学習中 (learning / relearning) and 復習; the three columns are what a session shows', () => {
-    const phased = (phase, dueDay) => ({ ...schedule(dueDay), phase });
-    const mixed = { a: phased('learning', TODAY), b: phased('relearning', '2026-09-28'), c: phased('review', TODAY),
-      d: phased('learning', '2026-10-03'), e: phased('relearning', '2026-10-09') };
-    const all = [card('a', 1), card('b', 2), card('c', 3), card('d', 4), card('e', 5), card('n', 6)];
-    const counts = countCards(all, (id) => mixed[id], TODAY);
-    expect(counts).toEqual({ new: 1, learning: 2, due: 1, total: 6 });
+  it('splits due cards into 学習中 (last rated again) and 復習; the three columns are what a session shows', () => {
+    const due = { a: schedule(TODAY), b: schedule('2026-09-28'), c: schedule(TODAY), d: schedule('2026-10-03'),
+      e: schedule('2026-09-30'), f: schedule(TODAY) };
+    const ratings = {
+      a: { grade: 1, dueDay: TODAY },
+      b: { grade: 1, dueDay: '2026-09-28' },
+      c: { grade: 3, dueDay: TODAY },
+      // Again but not due yet: in no column.
+      d: { grade: 1, dueDay: '2026-10-03' },
+      // An again that did not set the current due day (state.json is newer than the history) is not 学習中.
+      e: { grade: 1, dueDay: '2026-09-25' },
+      // No rating in the history (e.g. a hand-made state.json): 復習.
+    };
+    const all = [card('a', 1), card('b', 2), card('c', 3), card('d', 4), card('e', 5), card('f', 6), card('n', 7)];
+    const counts = countCards(all, (id) => due[id], (id) => ratings[id], TODAY);
+    expect(counts).toEqual({ new: 1, learning: 2, due: 3, total: 7 });
+    // The phase is not used: Kioku's FSRS settings keep every rated card in review.
+    const phased = { ...due, c: { ...schedule(TODAY), phase: 'relearning' } };
+    expect(countCards(all, (id) => phased[id], (id) => ratings[id], TODAY)).toEqual(counts);
     // Learning cards are queued like any due card, so the columns add up to the session (within the new limit).
-    expect(new ReviewQueue(all, (id) => mixed[id], TODAY).remaining(20)).toBe(counts.new + counts.learning + counts.due);
+    expect(new ReviewQueue(all, (id) => due[id], TODAY).remaining(20)).toBe(counts.new + counts.learning + counts.due);
   });
 
   it('stops at the allowance and reports held-back new cards; skip does not use the allowance', () => {

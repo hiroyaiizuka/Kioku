@@ -131,10 +131,11 @@
   --kioku-rating-radius: 10px;
   --kioku-rating-gap: 14px;
   --kioku-rating-font-size: 16px;
-  --kioku-rating-again: #c8574f;
-  --kioku-rating-hard: #b8892f;
+  /* White text at 4.5:1 or more (LEV-322; docs/ui-design.md §1). */
+  --kioku-rating-again: #c54e45;
+  --kioku-rating-hard: #936e26;
   --kioku-rating-good: #22807f;
-  --kioku-rating-easy: #3f7fcf;
+  --kioku-rating-easy: #3274c8;
 
   /* The header row the current screen draws; Obsidian's × is aligned to it. */
   --kioku-modal-header-padding-block: var(--kioku-deck-header-padding-block);
@@ -144,11 +145,22 @@
   overflow: hidden;
 }
 
+/*
+ * The count colors with only their HSL lightness moved until they reach 4.5:1 on the theme's modal
+ * background (LEV-322; values and ratios in docs/ui-design.md §1). Colors that already reach it stay.
+ */
+body.theme-dark .kioku-deck-picker-modal {
+  --kioku-deck-learn-color: #cc645d;
+}
+
 /* The dark hover and divider colors would be too strong, and the label gray too faint, on a light background. */
-.theme-light .kioku-deck-picker-modal {
+body.theme-light .kioku-deck-picker-modal {
   --kioku-deck-row-hover: var(--background-modifier-hover);
   --kioku-divider-color: var(--background-modifier-border);
   --kioku-qa-label-color: var(--text-muted);
+  --kioku-deck-new-color: #2f78ca;
+  --kioku-deck-learn-color: #c65048;
+  --kioku-deck-due-color: #51833c;
 }
 
 .kioku-deck-picker-modal.kioku-is-reviewing {
