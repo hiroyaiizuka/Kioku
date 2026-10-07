@@ -125,7 +125,7 @@ export class KiokuSettingTab extends PluginSettingTab {
     renderAiSettings(containerEl, {
       current: current.ai,
       save: async (change) => {
-        await this.settings.update({ ai: change((await this.settings.get()).ai) });
+        await this.settings.update((latest) => ({ ai: change(latest.ai) }));
       },
       redraw: () => this.display(),
       guarded,

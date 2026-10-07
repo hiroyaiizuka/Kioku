@@ -66,6 +66,87 @@ describe('ai settings (data.json `ai` section)', () => {
     expect(hasConsent('local', otherUrl)).toBe(false);
   });
 
+  it('reads a stored consent only while it matches the current fingerprint (old data.json included)', () => {
+    const cloud = 'gpt-oss:20b-cloud';
+    const local = (extra) => parseAiSettings({ enabled: true, providers: { local: { model: cloud, ...extra } } }).providers.local.consent;
+    const fingerprint = `local|ollama|http://localhost:11434|${cloud}`;
+    expect(local({ consent: fingerprint })).toBe(fingerprint);
+    // Left behind by earlier versions after a model change: read as no consent.
+    expect(local({ consent: 'local|ollama|http://localhost:11434|gpt-oss:120b-cloud' })).toBeNull();
+    expect(local({ server: 'llamacpp', baseUrl: 'http://localhost:11434', consent: fingerprint })).toBeNull();
+    for (const consent of [true, 1, {}, '', null, undefined]) expect(local({ consent })).toBeNull();
+    const jev = (model, consent) => parseAiSettings({ providers: { jev: { apiKey: KEY, model, consent } } }).providers.jev.consent;
+    expect(jev(undefined, 'jev|api.typesafe.ai|jev-latest')).toBe('jev|api.typesafe.ai|jev-latest');
+    expect(jev('jev-2', 'jev|api.typesafe.ai|jev-latest')).toBeNull();
+    expect(jev(undefined, true)).toBeNull();
+  });
+
+  it('a change to the destination, server or model revokes consent: changing it back does not restore it (LEV-329)', async () => {
+    const cloud = 'gpt-oss:20b-cloud';
+    const fingerprint = `local|ollama|http://localhost:11434|${cloud}`;
+    const saved = [];
+    const store = new SettingsStore(async () => ({ ai: { enabled: true, providers: { local: { model: cloud, consent: fingerprint },
+      jev: { apiKey: KEY, consent: 'jev|api.typesafe.ai|jev-latest' } } } }), async (data) => { saved.push(structuredClone(data)); });
+    const withLocal = async (change) => {
+      const { ai } = await store.get();
+      return store.update({ ai: { ...ai, providers: { ...ai.providers, local: { ...ai.providers.local, ...change } } } });
+    };
+    expect(hasConsent('local', (await store.get()).ai)).toBe(true);
+    for (const [away, back] of [[{ model: 'gpt-oss:120b-cloud' }, { model: cloud }],
+      [{ baseUrl: 'http://127.0.0.1:11434' }, { baseUrl: 'http://localhost:11434' }],
+      [{ server: 'llamacpp' }, { server: 'ollama' }]]) {
+      await withLocal({ consent: fingerprint });
+      expect(saved.at(-1).ai.providers.local.consent).toBe(fingerprint);
+      await withLocal(away);
+      expect(saved.at(-1).ai.providers.local.consent).toBeNull();
+      const restored = await withLocal(back);
+      expect(restored.ai.providers.local).toMatchObject({ model: cloud, baseUrl: 'http://localhost:11434', server: 'ollama', consent: null });
+      expect(saved.at(-1).ai.providers.local.consent).toBeNull();
+      expect(hasConsent('local', restored.ai)).toBe(false);
+    }
+    // Jev's consent belongs to Jev: the local changes above never touched it.
+    expect(saved.at(-1).ai.providers.jev.consent).toBe('jev|api.typesafe.ai|jev-latest');
+  });
+
+  it('saves run one at a time: a change and revert sent before the first save finishes still revokes consent', async () => {
+    const cloud = 'gpt-oss:20b-cloud';
+    const fingerprint = `local|ollama|http://localhost:11434|${cloud}`;
+    let disk = { ai: { enabled: true, providers: { local: { model: cloud, consent: fingerprint } } } };
+    const order = [];
+    // A slow data.json write (synced vault, slow disk): the revert is sent while the change is still saving.
+    const store = new SettingsStore(async () => structuredClone(disk), async (data) => {
+      order.push(`start ${data.ai.providers.local.model}`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      disk = structuredClone(data); order.push(`end ${data.ai.providers.local.model}`);
+    });
+    await store.get();
+    const model = (value) => store.update((latest) => ({ ai: { ...latest.ai, providers: { ...latest.ai.providers,
+      local: { ...latest.ai.providers.local, model: value } } } }));
+    const results = await Promise.all([model('gpt-oss:120b-cloud'), model(cloud)]);
+    expect(order).toEqual(['start gpt-oss:120b-cloud', 'end gpt-oss:120b-cloud', `start ${cloud}`, `end ${cloud}`]);
+    expect(results.map((settings) => settings.ai.providers.local.consent)).toEqual([null, null]);
+    expect(disk.ai.providers.local).toMatchObject({ model: cloud, consent: null });
+    expect(hasConsent('local', (await store.get()).ai)).toBe(false);
+    // A failed save does not block the next one.
+    const failing = new SettingsStore(async () => ({}), async (data) => { if (data.triggerTags[0] === 'x') throw new Error('EACCES'); });
+    await expect(failing.update({ triggerTags: ['x'] })).rejects.toThrow('EACCES');
+    expect((await failing.update({ triggerTags: ['y'] })).triggerTags).toEqual(['y']);
+  });
+
+  it('a stale consent from an earlier version is never revived and is cleared by the next save', async () => {
+    const saved = [];
+    const store = new SettingsStore(async () => ({ ai: { enabled: true,
+      providers: { local: { model: 'qwen3:8b', consent: 'local|ollama|http://localhost:11434|gpt-oss:20b-cloud' } } } }),
+    async (data) => { saved.push(structuredClone(data)); });
+    expect((await store.get()).ai.providers.local.consent).toBeNull();
+    expect(saved).toEqual([]);
+    await store.update({ triggerTags: ['英単語'] });
+    expect(saved.at(-1).ai.providers.local.consent).toBeNull();
+    const { ai } = await store.get();
+    const back = await store.update({ ai: { ...ai, providers: { ...ai.providers, local: { ...ai.providers.local, model: 'gpt-oss:20b-cloud' } } } });
+    expect(hasConsent('local', back.ai)).toBe(false);
+  });
+
   it('shows at most the last 4 characters of a key, nothing of a short one', () => {
     expect(maskedKey(KEY)).toBe('…CRET');
     expect(maskedKey('short')).toBe('（設定済み）');
