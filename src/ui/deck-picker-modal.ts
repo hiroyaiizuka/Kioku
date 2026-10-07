@@ -185,7 +185,9 @@ export class DeckPickerModal extends Modal {
     contentEl.empty();
     this.modalEl.classList.remove('kioku-is-reviewing');
     const header = contentEl.createDiv({ cls: 'kioku-modal-header' });
-    header.createDiv({ cls: 'kioku-deck-title', text: 'デッキ' });
+    const title = header.createDiv({ cls: 'kioku-deck-title', text: 'デッキ' });
+    title.setAttribute('role', 'heading');
+    title.setAttribute('aria-level', '2');
     const end = header.createDiv({ cls: 'kioku-modal-header-end' });
     const more = this.moreButton = end.createEl('button', { cls: 'clickable-icon kioku-deck-more' });
     setIcon(more, 'more-horizontal');

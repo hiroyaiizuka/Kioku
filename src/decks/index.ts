@@ -36,7 +36,7 @@ export interface DeckIndex {
    * in tag order. Every card in `all` belongs to at least one of them.
    */
   readonly listed: readonly DeckNode[];
-  /** Union of all decks ("全デッキ"). */
+  /** Union of all decks: every presentable card. */
   readonly all: ReadonlySet<CardId>;
   /** Adopted cards whose notes carry no trigger tag (count only). */
   readonly untagged: number;

@@ -92,6 +92,8 @@ describe('deck picker (ribbon)', () => {
     await openPicker(plugin);
     const header = picker().querySelector('.kioku-modal-header');
     expect(header.textContent).toBe('デッキ');
+    const title = header.querySelector('.kioku-deck-title');
+    expect([title.getAttribute('role'), title.getAttribute('aria-level')]).toEqual(['heading', '2']);
     const more = header.querySelector('.kioku-deck-more');
     expect([more.dataset.icon, more.classList.contains('clickable-icon'), more.getAttribute('aria-label')])
       .toEqual(['more-horizontal', true, 'その他の操作']);
@@ -795,6 +797,8 @@ describe('review edge cases', () => {
     await openPicker(plugin);
     expect(document.querySelector('.kioku-deck-problem').textContent).toMatch(/読み込めませんでした（設定の学習データのフォルダ/);
     expect(document.querySelector('.kioku-deck-row')).toBeNull();
+    // ⋯ (status, extraction) stays reachable and takes the focus.
+    expect(document.activeElement).toBe(document.querySelector('.kioku-deck-more'));
     const settingTab = plugin.settingTabs[0]; document.body.append(settingTab.containerEl); settingTab.display(); await settle();
     expect(settingTab.containerEl.textContent).toContain('上書きしないよう変更できません');
     expect(plugin.saved).toEqual([]);
