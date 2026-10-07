@@ -180,6 +180,10 @@ smoke script 自身はアプリを終了/起動しない。restart は `harness:
 15. 性能：5,000 ノート / 10,000 カード程度の生成 fixture（専用 Vault 内）で、ribbon からデッキ一覧が表示されるまでの時間を記録する（目安 500 ms 以内、開発機。超えたら `docs/m2-design.md` §3.3 のキャッシュを検討）。
 16. 未検証事項の記録：`Kioku/` の `.json`/`.jsonl` がファイル一覧・検索・グラフにどう出るか（「すべての拡張子を検出」設定の有無）、箇条書き項目の `^kioku-…` が `CachedMetadata.blocks` に入るか、`%%` 内の `#tag` を metadataCache が数えるか、を観察して記録する。
 
+### デッキ選択の ⋯ メニューと macOS のネイティブメニュー（LEV-321）
+
+デッキ選択の ⋯ は Obsidian の公開 `Menu` で、macOS の既定（`nativeMenus` 未設定）では OS のネイティブメニューとして出る。ネイティブメニューは DOM に無く CDP の撮影・操作では扱えず、CDP の合成クリックで開くと画面に残り、その後の `harness:quit` が 60 秒で終わらなかったことがある（LEV-321、2 回目の `harness:quit` で正常終了）。実機の自動確認では、⋯ を開く前に専用インスタンスの Console（CDP）で `app.vault.setConfig('nativeMenus', false)` とし（専用 Vault の `.obsidian/app.json` だけが変わる。smoke の baseline の対象外）、終わったら `app.vault.setConfig('nativeMenus', null)` で戻す。ネイティブメニューでの見た目とキー操作は自動確認できないので、必要なら人が専用インスタンスの画面で確かめる。
+
 ## M3 実機確認（LEV-277、未実施）
 
 M3 フェーズ A（`docs/m3-design.md` §16）の実機確認はまだ。手順の案は `docs/m3-design.md` §14（専用インスタンスの `harness:launch` / `harness:quit` だけ、本番 Vault は使わない、外部サービスへの送信は利用者の同意を得てから）。実施したら結果と証跡（`artifacts/lev-277/`）をここに記録する。単体テスト（偽の HTTP クライアント）の成功を実機成功と呼ばない。

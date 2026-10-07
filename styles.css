@@ -144,10 +144,11 @@
   overflow: hidden;
 }
 
-/* The dark hover and divider colors would be too strong on a light background. */
+/* The dark hover and divider colors would be too strong, and the label gray too faint, on a light background. */
 .theme-light .kioku-deck-picker-modal {
   --kioku-deck-row-hover: var(--background-modifier-hover);
   --kioku-divider-color: var(--background-modifier-border);
+  --kioku-qa-label-color: var(--text-muted);
 }
 
 .kioku-deck-picker-modal.kioku-is-reviewing {

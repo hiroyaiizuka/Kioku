@@ -427,6 +427,7 @@ describe('review screen layout', () => {
     expect(classes(pill)).toEqual(['kioku-review-progress-deck', 'kioku-review-progress-separator', 'kioku-review-progress-count']);
     expect(pill.textContent).toBe('#英語1/2');
     expect(pill.getAttribute('aria-label')).toBe('#英語：1 / 2 枚');
+    expect([pill.getAttribute('role'), pill.getAttribute('aria-level')]).toEqual(['heading', '2']);
     expect(pill.querySelector('.kioku-review-progress-icon').dataset.icon).toBe('gallery-vertical-end');
     expect(header.textContent).not.toMatch(/残り/);
     const end = header.querySelector('.kioku-modal-header-end');

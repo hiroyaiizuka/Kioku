@@ -298,14 +298,16 @@ export class ReviewScreen {
   private renderHeader(screen: HTMLElement, busy: boolean): HTMLButtonElement | null {
     const header = screen.createDiv({ cls: 'kioku-modal-header kioku-review-header' });
     const start = header.createDiv({ cls: 'kioku-modal-header-start' });
-    const back = this.button(start, '', 'clickable-icon kioku-review-back-button', () => this.ctx.backToPicker(),
-      this.phase === 'done' ? false : busy);
+    const back = this.button(start, '', 'clickable-icon kioku-review-back-button', () => this.ctx.backToPicker(), busy);
     setIcon(back, 'arrow-left');
     back.setAttribute('aria-label', 'デッキに戻る');
     const handled = this.queue.rated + this.queue.skipped;
     const total = handled + this.queue.remaining(this.allowance());
     const position = this.current && this.phase !== 'done' ? handled + 1 : handled;
     const progress = header.createDiv({ cls: 'kioku-review-progress' });
+    // The screen's heading: its name is read instead of the visual pieces below.
+    progress.setAttribute('role', 'heading');
+    progress.setAttribute('aria-level', '2');
     progress.setAttribute('aria-label', `${this.ctx.deckLabel}：${position} / ${total} 枚`);
     progress.createSpan({ cls: 'kioku-review-progress-deck', text: this.ctx.deckLabel }).setAttribute('aria-hidden', 'true');
     progress.createSpan({ cls: 'kioku-review-progress-separator' }).setAttribute('aria-hidden', 'true');
