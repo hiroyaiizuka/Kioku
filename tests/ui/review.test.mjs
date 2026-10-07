@@ -752,6 +752,16 @@ describe('new-card limit', () => {
     expect(question()).toBe('図 [[heart.png]] は？');
   });
 
+  it('shows no held-back line when the new cards fit today\'s allowance exactly, or with no limit', async () => {
+    for (const newPerDay of [4, null]) {
+      const { plugin } = setup({ settings: { newPerDay } });
+      await openPicker(plugin);
+      expect(rows()[0]).toBe('#kioku | 新規 4 · 学習中 0 · 復習 0');
+      expect(heldBack()).toBeUndefined();
+      picker().querySelector('.modal-header-button').click();
+    }
+  });
+
   it('resets 今日だけ追加 on the next Kioku day (04:00 local)', async () => {
     const kioku = { [S]: JSON.stringify({ schemaVersion: 1, cards: {}, today: { day: '2026-10-02', newIntroduced: 2, extraNew: 10 }, applied: {} }) };
     vi.setSystemTime(new Date(2026, 9, 3, 3, 59));

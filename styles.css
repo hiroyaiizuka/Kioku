@@ -590,8 +590,9 @@ body.theme-light .kioku-deck-picker-modal {
   --kioku-rating-color: var(--kioku-rating-easy);
 }
 
+/* Darkened, not lightened, so the white text stays at 4.5:1 or more on hover (LEV-322). */
 .kioku-deck-picker-modal .kioku-review-grade:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--kioku-rating-color) 88%, #ffffff);
+  background: color-mix(in srgb, var(--kioku-rating-color) 88%, #000000);
 }
 
 /* Restores a visible focus ring on the colored buttons. */
@@ -609,13 +610,14 @@ body.theme-light .kioku-deck-picker-modal {
   white-space: nowrap;
 }
 
+/* Full white (no opacity) on the colored buttons: 4.5:1 or more (LEV-322). */
 .kioku-deck-picker-modal .kioku-review-interval {
   font-size: 0.82em;
   font-variant-numeric: tabular-nums;
-  opacity: 0.85;
 }
 
 .kioku-deck-picker-modal .kioku-review-grade .kioku-review-key {
+  opacity: 1;
   position: absolute;
   right: 8px;
   bottom: 7px;

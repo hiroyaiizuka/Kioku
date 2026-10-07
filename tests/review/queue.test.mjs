@@ -46,10 +46,15 @@ describe('session queue', () => {
       // An again that did not set the current due day (state.json is newer than the history) is not 学習中.
       e: { grade: 1, dueDay: '2026-09-25' },
       // No rating in the history (e.g. a hand-made state.json): 復習.
+      // 難しい and 簡単 are not もう一度: 復習.
+      g: { grade: 2, dueDay: TODAY },
+      h: { grade: 4, dueDay: TODAY },
     };
-    const all = [card('a', 1), card('b', 2), card('c', 3), card('d', 4), card('e', 5), card('f', 6), card('n', 7)];
+    due.g = schedule(TODAY);
+    due.h = schedule(TODAY);
+    const all = [card('a', 1), card('b', 2), card('c', 3), card('d', 4), card('e', 5), card('f', 6), card('g', 7), card('h', 8), card('n', 9)];
     const counts = countCards(all, (id) => due[id], (id) => ratings[id], TODAY);
-    expect(counts).toEqual({ new: 1, learning: 2, due: 3, total: 7 });
+    expect(counts).toEqual({ new: 1, learning: 2, due: 5, total: 9 });
     // The phase is not used: Kioku's FSRS settings keep every rated card in review.
     const phased = { ...due, c: { ...schedule(TODAY), phase: 'relearning' } };
     expect(countCards(all, (id) => phased[id], (id) => ratings[id], TODAY)).toEqual(counts);
