@@ -1,4 +1,4 @@
-// Deck membership, the deck tree and duplicate IDs. Pure; see docs/m2-design.md §3.
+// Deck membership, the listed decks and duplicate IDs. Pure; see docs/m2-design.md §3.
 import type { ReviewCard } from '../review/queue';
 import type { CardId } from '../review/types';
 import { tagKey } from './tags';
@@ -15,12 +15,8 @@ export interface NoteCards {
 export interface DeckNode {
   /** Lower-cased tag path, e.g. `kioku/医学`. */
   readonly key: string;
-  /** Last path segment as first spelled in the vault. */
-  readonly name: string;
   /** Full tag path as first spelled, e.g. `kioku/医学`. */
   readonly label: string;
-  readonly depth: number;
-  readonly children: DeckNode[];
   /** Cards of this deck and all of its descendants, unique by ID. */
   readonly cardIds: Set<CardId>;
 }
@@ -33,9 +29,13 @@ export interface IdConflict {
 export interface DeckIndex {
   /** Every unique, presentable card in any deck. */
   readonly cards: ReadonlyMap<CardId, ReviewCard>;
-  /** Top-level decks (one per trigger tag, unless a trigger is a child of another). */
-  readonly roots: readonly DeckNode[];
+  /** Every deck: each trigger-matching tag and its parent paths down from the trigger. */
   readonly nodes: ReadonlyMap<string, DeckNode>;
+  /**
+   * The picker's rows: decks of tags written on a note (not parents only implied by a child tag),
+   * in tag order. Every card in `all` belongs to at least one of them.
+   */
+  readonly listed: readonly DeckNode[];
   /** Union of all decks ("全デッキ"). */
   readonly all: ReadonlySet<CardId>;
   /** Adopted cards whose notes carry no trigger tag (count only). */
@@ -73,6 +73,7 @@ export function buildDeckIndex(notes: readonly NoteCards[], triggers: readonly s
   const conflicts: IdConflict[] = [];
   const nodes = new Map<string, DeckNode>();
   const triggerKeys = triggers.map(tagKey);
+  const written = new Set<string>();
   let untagged = 0;
   for (const [id, list] of occurrences) {
     const first = list[0];
@@ -97,30 +98,15 @@ export function buildDeckIndex(notes: readonly NoteCards[], triggers: readonly s
         const key = keys[index] ?? '';
         let node = nodes.get(key);
         if (!node) {
-          node = { key, name: segments[index] ?? key, label: segments.slice(0, index + 1).join('/'), depth: 0,
-            children: [], cardIds: new Set() };
+          node = { key, label: segments.slice(0, index + 1).join('/'), cardIds: new Set() };
           nodes.set(key, node);
         }
         node.cardIds.add(id);
       }
+      written.add(keys[keys.length - 1] ?? '');
     }
   }
-  const roots: DeckNode[] = [];
-  const sortedKeys = [...nodes.keys()].sort();
-  for (const key of sortedKeys) {
-    const node = nodes.get(key);
-    if (!node) continue;
-    const parentKey = key.includes('/') ? key.slice(0, key.lastIndexOf('/')) : null;
-    const parent = parentKey === null ? undefined : nodes.get(parentKey);
-    if (parent) parent.children.push(node);
-    else roots.push(node);
-  }
-  const setDepth = (node: DeckNode, depth: number): void => {
-    (node as { depth: number }).depth = depth;
-    node.children.sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : 0));
-    for (const child of node.children) setDepth(child, depth + 1);
-  };
-  for (const root of roots) setDepth(root, 0);
+  const listed = [...written].sort().flatMap((key) => nodes.get(key) ?? []);
   conflicts.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  return { cards, roots, nodes, all: new Set(cards.keys()), untagged, conflicts };
+  return { cards, nodes, listed, all: new Set(cards.keys()), untagged, conflicts };
 }

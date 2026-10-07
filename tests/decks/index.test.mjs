@@ -37,27 +37,42 @@ describe('deck index', () => {
     { path: 'e/root.md', deckTags: ['kioku'], cards: [qa('r1')] },
   ];
 
-  it('builds child decks; a parent includes its children; 全デッキ is the union; untagged cards are only counted', () => {
+  it('makes a deck of every tag path; a parent includes its children; 全カード is the union; untagged cards are only counted', () => {
     const index = buildDeckIndex(notes, ['kioku']);
-    expect(index.roots.map((root) => root.key)).toEqual(['kioku']);
-    const kioku = index.nodes.get('kioku');
-    expect(kioku.children.map((child) => child.label)).toEqual(['Kioku/医学', 'kioku/英語']);
-    expect(index.nodes.get('kioku/医学').children.map((child) => child.name)).toEqual(['生理']);
+    expect([...index.nodes.keys()].sort()).toEqual(['kioku', 'kioku/医学', 'kioku/医学/生理', 'kioku/英語']);
+    expect(index.nodes.get('kioku/医学').label).toBe('Kioku/医学');
     expect([...index.nodes.get('kioku/医学/生理').cardIds]).toEqual(['kioku-p1', 'kioku-p2']);
     expect([...index.nodes.get('kioku/医学').cardIds].sort()).toEqual(['kioku-m1', 'kioku-p1', 'kioku-p2']);
     expect([...index.nodes.get('kioku/英語').cardIds].sort()).toEqual(['kioku-e1', 'kioku-m1']);
+    const kioku = index.nodes.get('kioku');
     expect([...kioku.cardIds].sort()).toEqual(['kioku-e1', 'kioku-m1', 'kioku-p1', 'kioku-p2', 'kioku-r1']);
     expect([...index.all].sort()).toEqual([...kioku.cardIds].sort());
     expect(index.untagged).toBe(2);
-    expect(index.nodes.get('kioku/医学/生理').depth).toBe(2);
     // Note order (path order, then occurrence) drives the new-card order.
     expect([...index.cards.values()].sort((a, b) => a.order - b.order).map((card) => card.id))
       .toEqual(['kioku-m1', 'kioku-p1', 'kioku-p2', 'kioku-e1', 'kioku-r1']);
   });
 
+  it('lists only the decks of written tags, in tag order, and every card is in at least one of them', () => {
+    const written = [
+      { path: 'b/生理.md', deckTags: ['kioku/医学/生理'], cards: [qa('p1')] },
+      { path: 'c/英語.md', deckTags: ['kioku/英語', 'kioku/英語/動詞'], cards: [qa('e1')] },
+      { path: 'd/名詞.md', deckTags: ['KIOKU/英語/名詞'], cards: [qa('n1')] },
+    ];
+    const index = buildDeckIndex(written, ['kioku']);
+    // kioku and kioku/医学 are decks (parents) but no note carries them, so they are not listed.
+    expect(index.listed.map((deck) => deck.label)).toEqual(['kioku/医学/生理', 'kioku/英語', 'kioku/英語/動詞', 'KIOKU/英語/名詞']);
+    expect([...index.listed[1].cardIds].sort()).toEqual(['kioku-e1', 'kioku-n1']);
+    expect(new Set(index.listed.flatMap((deck) => [...deck.cardIds]))).toEqual(index.all);
+    // A note with the bare trigger tag lists it, holding every card.
+    const withRoot = buildDeckIndex(notes, ['kioku']);
+    expect(withRoot.listed.map((deck) => deck.key)).toEqual(['kioku', 'kioku/医学', 'kioku/医学/生理', 'kioku/英語']);
+    expect(withRoot.listed[0].cardIds).toEqual(withRoot.all);
+  });
+
   it('makes one top-level deck per trigger tag', () => {
     const index = buildDeckIndex([...notes, { path: 'f.md', deckTags: ['英単語/動詞'], cards: [qa('v1')] }], ['kioku', '英単語']);
-    expect(index.roots.map((root) => root.key)).toEqual(['kioku', '英単語']);
+    expect(index.listed.map((deck) => deck.key)).toEqual(['kioku', 'kioku/医学', 'kioku/医学/生理', 'kioku/英語', '英単語/動詞']);
     expect([...index.nodes.get('英単語').cardIds]).toEqual(['kioku-v1']);
     expect(index.all.has('kioku-v1')).toBe(true);
   });

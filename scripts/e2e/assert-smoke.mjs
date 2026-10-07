@@ -38,7 +38,7 @@ export function assertStartup(state, expected) {
 /** Ribbon target since M2: the deck picker, whose root carries the build identity. */
 export function assertDeckPicker(state, expected) {
   if (!state || state.count !== 1 || state.buildId !== expected.buildId || state.version !== expected.version
-      || !state.text.includes('Kioku') || !state.text.includes('全デッキ') || state.loaded !== true) {
+      || state.header !== 'デッキ' || state.loaded !== true) {
     throw new Error('Actual Kioku deck picker absent, duplicated, stale or not loaded.');
   }
   assertCentered(state, 'Deck picker');
@@ -50,6 +50,7 @@ export function modalObservation(selector, identitySelector) {
   return `JSON.stringify((()=>{const e=document.querySelector(${JSON.stringify(selector)});`
     + `const b=${identity};const r=e?.getBoundingClientRect();`
     + `return {count:document.querySelectorAll(${JSON.stringify(selector)}).length,text:e?.textContent??'',`
+    + `header:e?.querySelector('.kioku-modal-header')?.textContent??'',`
     + `loaded:Boolean(e?.querySelector('.kioku-deck-list, .kioku-deck-problem')),`
     + `buildId:b?.dataset.kiokuBuildId,version:b?.dataset.kiokuVersion,x:r?.x??0,y:r?.y??0,width:r?.width??0,height:r?.height??0,`
     + `viewportWidth:innerWidth,viewportHeight:innerHeight}})())`;

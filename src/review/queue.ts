@@ -23,23 +23,38 @@ export function newAllowance(counter: TodayCounter | null, today: KiokuDay, newP
   return Math.max(0, newPerDay + (current?.extraNew ?? 0) - (current?.newIntroduced ?? 0));
 }
 
+export const isLearning = (schedule: CardSchedule): boolean =>
+  schedule.phase === 'learning' || schedule.phase === 'relearning';
+
+/**
+ * Today's work of a deck in three disjoint columns (docs/m2-design.md §4.3): `learning` and `due`
+ * split the due cards by FSRS phase, so new + learning + due is what a session can show today
+ * (before the new-card limit).
+ */
 export interface DeckCounts {
-  readonly due: number;
   readonly new: number;
+  /** Due cards in the learning or relearning phase. */
+  readonly learning: number;
+  /** Due cards in any other phase (review). */
+  readonly due: number;
   readonly total: number;
 }
 
 export function countCards(cards: Iterable<ReviewCard>, lookup: ScheduleLookup, today: KiokuDay): DeckCounts {
-  let due = 0;
   let fresh = 0;
+  let learning = 0;
+  let due = 0;
   let total = 0;
   for (const card of cards) {
     total += 1;
     const schedule = lookup(card.id);
     if (!schedule) fresh += 1;
-    else if (isDue(schedule, today)) due += 1;
+    else if (isDue(schedule, today)) {
+      if (isLearning(schedule)) learning += 1;
+      else due += 1;
+    }
   }
-  return { due, new: fresh, total };
+  return { new: fresh, learning, due, total };
 }
 
 /**

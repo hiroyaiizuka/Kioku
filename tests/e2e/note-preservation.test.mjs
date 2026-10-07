@@ -64,7 +64,8 @@ async function simulatedSmoke(root, expected, baselineId, mutateAt, baselineMode
             url: popout ? 'about:blank' : 'app://obsidian.md/index.html', processType: 'renderer', electron: '43.3.0' };
           else if (expression.includes('getBoundingClientRect')) {
             value = { count: 1, buildId: expected.buildId, version: expected.version, loaded: true,
-              text: expression.includes('kioku-deck-picker-modal') ? 'Kioku — デッキを選んで復習 全デッキ' : 'Kioku デッキ AI は未実装',
+              text: expression.includes('kioku-deck-picker-modal') ? 'デッキ新規学習中復習' : 'Kioku デッキ AI は未実装',
+              header: expression.includes('kioku-deck-picker-modal') ? 'デッキ' : '',
               x: 300, y: 200, width: 400, height: 300, viewportWidth: 1000, viewportHeight: 700 };
           } else if (expression.includes('executeCommandById')) {
             uiOperations += 1; modalCount = 1; kiokuModal = 'kioku-startup-modal'; value = true;
