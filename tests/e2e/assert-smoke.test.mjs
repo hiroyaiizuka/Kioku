@@ -7,7 +7,7 @@ import { assertDeckPicker, assertNativeTarget, assertNoForeignModal, assertStart
 const expected = { buildId: 'abc', version: '0.0.1' };
 const visible = { count: 1, text: 'Kioku デッキ AI は未実装', buildId: 'abc', version: '0.0.1',
   x: 300, y: 200, width: 400, height: 300, viewportWidth: 1000, viewportHeight: 700 };
-const picker = { ...visible, text: 'Kioku — デッキを選んで復習 全デッキ', loaded: true };
+const picker = { ...visible, text: 'デッキ新規学習中復習', header: 'デッキ', loaded: true };
 describe('native smoke assertions', () => {
   it('rejects a missing, stale, duplicated, dishonest, invisible or off-center modal', () => {
     for (const state of [null, { ...visible, count: 0 }, { ...visible, count: 2 }, { ...visible, buildId: 'stale' },
@@ -18,7 +18,7 @@ describe('native smoke assertions', () => {
   });
   it('rejects a missing, stale, duplicated, unloaded or off-center deck picker (the ribbon target)', () => {
     for (const state of [null, { ...picker, count: 0 }, { ...picker, count: 2 }, { ...picker, buildId: 'stale' },
-      { ...picker, version: '0.0.2' }, { ...picker, loaded: false }, { ...picker, text: 'Kioku 状態' }, { ...picker, y: 5 }]) {
+      { ...picker, version: '0.0.2' }, { ...picker, loaded: false }, { ...picker, header: 'Kioku 状態' }, { ...picker, header: undefined }, { ...picker, y: 5 }]) {
       expect(() => assertDeckPicker(state, expected)).toThrow();
     }
     expect(() => assertDeckPicker(picker, expected)).not.toThrow();

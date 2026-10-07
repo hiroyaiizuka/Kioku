@@ -1,6 +1,6 @@
-import { Modal, Notice, Scope, type App } from 'obsidian';
+import { Menu, Modal, Notice, Scope, setIcon, type App } from 'obsidian';
 import { errorMessage } from '../cards/error-message';
-import { buildDeckIndex, type DeckIndex, type DeckNode } from '../decks/index';
+import { buildDeckIndex, type DeckIndex } from '../decks/index';
 import { scanVault, type ScanResult } from '../decks/scan';
 import { kiokuDay } from '../review/day';
 import { countCards, newAllowance, type ReviewCard } from '../review/queue';
@@ -27,17 +27,29 @@ interface Loaded {
   readonly today: KiokuDay;
 }
 
-const formatAllowance = (allowance: number): string =>
-  Number.isFinite(allowance) ? `今日の新規 残り ${allowance} 枚` : '今日の新規 上限なし';
+/** The three columns, left to right, each colored by its `mod-<kind>` class. */
+const COLUMNS = [
+  { kind: 'new', title: '新規' },
+  { kind: 'learning', title: '学習中' },
+  { kind: 'due', title: '復習' },
+] as const;
+
+/** Only reachable when the allowance is finite (more new cards than it). */
+const formatLater = (allowance: number): string => `今日の新規は残り ${allowance} 枚（残りは明日以降）`;
+
+const dataFolderNote = (folder: string): string =>
+  `学習の記録と日程は Vault の「${folder}」フォルダに保存されます（最初の評価で作成）。このフォルダを削除・移動すると記録が失われます。`;
+const DATA_NOTE_MS = 10000;
 
 /**
- * Ribbon target: deck tree with Due / New / Total, then the review screen in the same modal.
+ * Ribbon target: a flat list of the tag decks with 新規 / 学習中 / 復習, then the review screen in the same modal.
  * Opening scans notes read-only and reads `<dataFolder>/` without creating or writing anything.
  */
 export class DeckPickerModal extends Modal {
   private generation = 0;
   private loaded: Loaded | null = null;
   private review: ReviewScreen | null = null;
+  private moreButton: HTMLButtonElement | null = null;
   /** "今日だけ追加" not yet on disk (no rating yet): re-applied after the picker reloads the store. */
   private unsavedExtra: { folder: string; day: KiokuDay; count: number } | null = null;
   private readonly onKeyDown = (evt: KeyboardEvent): void => {
@@ -63,7 +75,6 @@ export class DeckPickerModal extends Modal {
     this.modalEl.addClass('kioku-deck-picker-modal');
     this.modalEl.dataset.kiokuBuildId = this.options.identity.buildId;
     this.modalEl.dataset.kiokuVersion = this.options.identity.version;
-    this.setTitle('Kioku — デッキを選んで復習');
     this.containerEl.addEventListener('keydown', this.onKeyDown, true);
     this.containerEl.addEventListener('keyup', this.onKeyUp, true);
     void this.load();
@@ -76,6 +87,7 @@ export class DeckPickerModal extends Modal {
     this.review?.dispose();
     this.review = null;
     this.loaded = null;
+    this.moreButton = null;
     this.contentEl.empty();
     this.options.onClosed?.();
   }
@@ -84,8 +96,7 @@ export class DeckPickerModal extends Modal {
     const generation = this.generation += 1;
     this.review?.dispose();
     this.review = null;
-    this.contentEl.empty();
-    this.contentEl.createEl('p', { cls: 'kioku-deck-loading', text: '読み込んでいます…' });
+    this.renderFrame().createEl('p', { cls: 'kioku-deck-loading', text: '読み込んでいます…' });
     let loaded: Loaded;
     try {
       const settings = await this.options.settings();
@@ -101,9 +112,8 @@ export class DeckPickerModal extends Modal {
       loaded = { settings, store, scan, index: buildDeckIndex(scan.notes, settings.triggerTags), today };
     } catch (error) {
       if (generation !== this.generation) return;
-      this.contentEl.empty();
-      this.contentEl.createEl('p', { cls: 'kioku-deck-problem', text: `読み込めませんでした（${errorMessage(error)}）。` });
-      this.renderFooter();
+      this.renderFrame().createEl('p', { cls: 'kioku-deck-problem', text: `読み込めませんでした（${errorMessage(error)}）。` });
+      this.moreButton?.focus();
       return;
     }
     if (generation !== this.generation) return;
@@ -117,37 +127,35 @@ export class DeckPickerModal extends Modal {
     const { settings, store, index, today, scan } = loaded;
     const lookup = (id: string): CardSchedule | undefined => store.state.cards[id];
     const allowance = newAllowance(store.state.today, today, settings.newPerDay);
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.createEl('p', { cls: 'kioku-deck-allowance', text: formatAllowance(allowance) });
-    if (store.problem) this.renderProblem(contentEl, store);
-    const list = contentEl.createDiv({ cls: 'kioku-deck-list' });
-    const cardsOf = (ids: Iterable<string>): ReviewCard[] =>
-      [...ids].map((id) => index.cards.get(id)).filter((card): card is ReviewCard => card !== undefined);
-    const row = (key: string, label: string, ids: Iterable<string>, depth: number): void => {
-      const cards = cardsOf(ids);
+    const body = this.renderFrame();
+    if (store.problem) this.renderProblem(body, store);
+    const list = body.createDiv({ cls: 'kioku-deck-list' });
+    if (index.listed.length) {
+      const columns = list.createDiv({ cls: 'kioku-deck-columns' });
+      // The rows' aria-labels name every count, so the visual column titles are not read again.
+      columns.setAttribute('aria-hidden', 'true');
+      columns.createSpan();
+      for (const column of COLUMNS) columns.createSpan({ cls: `kioku-deck-column mod-${column.kind}`, text: column.title });
+    }
+    // With a single trigger tag every row starts with it, so it is left out of the titles.
+    const single = settings.triggerTags.length === 1 ? settings.triggerTags[0]?.toLowerCase() : undefined;
+    for (const deck of index.listed) {
+      const label = `#${single !== undefined && deck.key.startsWith(`${single}/`) ? deck.label.slice(single.length + 1) : deck.label}`;
+      const cards = [...deck.cardIds].map((id) => index.cards.get(id)).filter((card): card is ReviewCard => card !== undefined);
       const counts = countCards(cards, lookup, today);
       const item = list.createEl('button', { cls: 'kioku-deck-row' });
-      item.dataset.kiokuDeck = key;
-      item.style.setProperty('--kioku-deck-depth', String(depth));
+      item.dataset.kiokuDeck = deck.key;
       item.createSpan({ cls: 'kioku-deck-name', text: label });
-      item.createSpan({ cls: 'kioku-deck-counts', text: `Due ${counts.due} · New ${counts.new} · Total ${counts.total}` });
-      if (counts.new > allowance) item.createSpan({ cls: 'kioku-deck-later', text: '新規の残りは明日以降' });
-      item.setAttribute('aria-label', `${label}：期日 ${counts.due} 枚、新規 ${counts.new} 枚、合計 ${counts.total} 枚`);
+      for (const column of COLUMNS) {
+        const count = counts[column.kind];
+        item.createSpan({ cls: `kioku-deck-count mod-${column.kind}${count === 0 ? ' is-zero' : ''}`, text: String(count) });
+      }
+      const later = counts.new > allowance ? `、${formatLater(allowance)}` : '';
+      if (later) item.dataset.kiokuLater = String(allowance);
+      item.setAttribute('aria-label', `${label}：${COLUMNS.map((column) => `${column.title} ${counts[column.kind]} 枚`).join('、')}${later}`);
       item.addEventListener('click', () => this.startReview(label, cards));
-    };
-    row('*', '全デッキ', index.all, 0);
-    // With a single trigger tag its root deck equals 全デッキ, so only its children are listed.
-    const single = settings.triggerTags.length === 1 ? settings.triggerTags[0]?.toLowerCase() : undefined;
-    const tops = index.roots.flatMap((root) => (root.key === single ? root.children : [root]));
-    const visit = (node: DeckNode, depth: number): void => {
-      const label = single !== undefined && node.label.toLowerCase().startsWith(`${single}/`)
-        ? node.label.slice(single.length + 1).split('/').join(' › ') : node.label.split('/').join(' › ');
-      row(node.key, label, node.cardIds, depth);
-      for (const child of node.children) visit(child, depth + 1);
-    };
-    for (const top of tops) visit(top, 1);
-    const notes = contentEl.createDiv({ cls: 'kioku-deck-notes' });
+    }
+    const notes = body.createDiv({ cls: 'kioku-deck-notes' });
     const tagList = settings.triggerTags.map((tag) => `#${tag}`).join('、');
     if (!index.all.size) {
       notes.createEl('p', { cls: 'kioku-deck-empty',
@@ -168,10 +176,46 @@ export class DeckPickerModal extends Modal {
     for (const failed of scan.unreadable) {
       notes.createEl('p', { cls: 'kioku-deck-unreadable', text: `読めなかったノート：${failed.path}（${failed.reason}）` });
     }
-    notes.createEl('p', { cls: 'kioku-deck-data-note',
-      text: `学習の記録と日程は Vault の「${settings.dataFolder}」フォルダに保存されます（最初の評価で作成）。このフォルダを削除・移動すると記録が失われます。` });
-    this.renderFooter();
-    list.querySelector<HTMLButtonElement>('.kioku-deck-row')?.focus();
+    (list.querySelector<HTMLButtonElement>('.kioku-deck-row') ?? this.moreButton)?.focus();
+  }
+
+  /** Header (title, ⋯ and Obsidian's own ×) over an emptied body; returns the body. */
+  private renderFrame(): HTMLElement {
+    const { contentEl } = this;
+    contentEl.empty();
+    this.modalEl.classList.remove('kioku-is-reviewing');
+    const header = contentEl.createDiv({ cls: 'kioku-modal-header' });
+    const title = header.createDiv({ cls: 'kioku-deck-title', text: 'デッキ' });
+    title.setAttribute('role', 'heading');
+    title.setAttribute('aria-level', '2');
+    const end = header.createDiv({ cls: 'kioku-modal-header-end' });
+    const more = this.moreButton = end.createEl('button', { cls: 'clickable-icon kioku-deck-more' });
+    setIcon(more, 'more-horizontal');
+    more.setAttribute('aria-label', 'その他の操作');
+    more.addEventListener('click', () => this.openMenu(more));
+    // Keeps the space where Obsidian draws the modal's × button.
+    end.createSpan({ cls: 'kioku-modal-close-space' });
+    return contentEl.createDiv({ cls: 'kioku-deck-body' });
+  }
+
+  private openMenu(anchor: HTMLElement): void {
+    const dataFolder = this.loaded?.settings.dataFolder;
+    const menu = new Menu();
+    menu.addItem((item) => item.setTitle('問い・答えの候補を抽出').setIcon('gallery-vertical-end').onClick(() => {
+      this.close();
+      this.options.extract();
+    }));
+    menu.addItem((item) => item.setTitle('状態').setIcon('info').onClick(() => {
+      this.close();
+      this.options.openStatus();
+    }));
+    if (dataFolder !== undefined) {
+      menu.addItem((item) => item.setTitle('記録の保存先について').setIcon('folder').onClick(() => {
+        new Notice(dataFolderNote(dataFolder), DATA_NOTE_MS);
+      }));
+    }
+    const rect = anchor.getBoundingClientRect();
+    menu.showAtPosition({ x: rect.right, y: rect.bottom, left: true }, anchor.ownerDocument);
   }
 
   private renderProblem(parent: HTMLElement, store: ReviewStore): void {
@@ -201,32 +245,18 @@ export class DeckPickerModal extends Modal {
     void this.load();
   }
 
-  private renderFooter(): void {
-    const footer = this.contentEl.createDiv({ cls: 'kioku-deck-footer' });
-    const status = footer.createEl('button', { text: '状態', cls: 'kioku-deck-picker-status' });
-    status.addEventListener('click', () => {
-      this.close();
-      this.options.openStatus();
-    });
-    const extract = footer.createEl('button', { text: '問い・答えの候補を抽出', cls: 'kioku-deck-picker-extract' });
-    extract.addEventListener('click', () => {
-      this.close();
-      this.options.extract();
-    });
-    const close = footer.createEl('button', { text: '閉じる', cls: 'kioku-deck-picker-close' });
-    close.addEventListener('click', () => this.close());
-  }
-
   private startReview(label: string, cards: readonly ReviewCard[]): void {
     const loaded = this.loaded;
     if (!loaded) return;
-    this.setTitle(`Kioku — ${label}`);
+    this.moreButton = null;
+    this.modalEl.classList.add('kioku-is-reviewing');
     this.review = new ReviewScreen({
       app: this.app,
       container: this.contentEl,
       store: loaded.store,
       settings: loaded.settings,
       cards,
+      deckLabel: label,
       today: loaded.today,
       now: this.options.now,
       onExtraNew: (count) => {
@@ -238,10 +268,7 @@ export class DeckPickerModal extends Modal {
         this.close();
         void this.app.workspace.openLinkText(`${card.path}#^${card.id}`, '', false);
       },
-      backToPicker: () => {
-        this.setTitle('Kioku — デッキを選んで復習');
-        void this.load();
-      },
+      backToPicker: () => void this.load(),
       close: () => this.close(),
     });
     this.review.start();

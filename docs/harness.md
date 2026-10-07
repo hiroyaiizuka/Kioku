@@ -113,7 +113,7 @@ opt-out のときに同じであることを保証するのは、各手順の終
 4. `KIOKU_BASELINE_ID=<ID> npm run harness:e2e:smoke`。baseline が無い・identity が異なる・CDP port が記録 port と異なる場合は FAIL。開始時に Kioku 以外の `.modal-container`（trust dialog など）が開いていれば UI 操作前に FAIL する。Kioku 自身の modal（container 内の modal 要素 `.modal` に `kioku-startup-modal`・`kioku-deck-picker-modal`・`kioku-candidate-modal` のどれかがあるもの。復習画面はデッキ選択 modal の中に描画される）は foreign とみなさない。デッキ選択を開いている間と PASS 直前にも同じ判定をする。startup 後かつ UI 操作前、各 open/close 後、Escape 後のファイル一覧/hash が **起動前 baseline** と同じことを必須判定し、追加・削除・rename・bytes 変更のいずれも FAIL にする。同じ各時点で、学習データのフォルダが**空でも作られていない**ことを判定する（ファイルの snapshot だけでは空フォルダを検出できないため）。baseline 時点で既にフォルダがあった Vault（評価済み）では、フォルダが残っていることを判定し、中のファイルは内容 baseline で比較する。
 5. restart pair: `npm run harness:quit && npm run harness:launch` の後、**同じ** `KIOKU_BASELINE_ID` で 4 を再実行する。restart 前に baseline を採り直さない。
 
-script は loopback CDP 以外を拒否し、専用 Vault の native page が1つ、ribbon が1つであることを検査する。M2 から ribbon はデッキ選択を開くので、ribbon → デッキ選択（root `.kioku-deck-picker-modal` の version/build ID data attribute が current preflight と一致、読み込み完了、「全デッキ」表示、中央）→ 閉じるを2回、ribbon → デッキ選択 → Escape を1回行う。状態 modal はコマンド `kioku:open-startup` から開き、`.kioku-build-identity` の version/build ID と未実装の明示（AI）と中央表示を検査して閉じる。page error を確認し、`artifacts/e2e-smoke/` に JSON と screenshot（デッキ選択2枚、状態 modal 1枚）を残す。実際の plugin/modal が無ければ FAIL する。
+script は loopback CDP 以外を拒否し、専用 Vault の native page が1つ、ribbon が1つであることを検査する。M2 から ribbon はデッキ選択を開くので、ribbon → デッキ選択（root `.kioku-deck-picker-modal` の version/build ID data attribute が current preflight と一致、読み込み完了、上部の見出しが「デッキ」、中央）→ Obsidian 標準の ×（Obsidian 1.14 は `.modal-header-button`、それより前は `.modal-close-button`）で閉じるを2回、ribbon → デッキ選択 → Escape を1回行う。状態 modal はコマンド `kioku:open-startup` から開き、`.kioku-build-identity` の version/build ID と未実装の明示（AI）と中央表示を検査して閉じる。page error を確認し、`artifacts/e2e-smoke/` に JSON と screenshot（デッキ選択2枚、状態 modal 1枚）を残す。実際の plugin/modal が無ければ FAIL する。
 
 baseline の対象は Markdown・Excalidraw・添付を含む全内容ファイル。Obsidian が変更する `.obsidian/` と harness marker `.kioku-generated` だけを除外する。baseline 自体を再保存・上書きしない。テスト中の手動ノート編集は禁止。停止の証明は専用インスタンス（記録 PID、専用 profile を持つプロセス、CDP port）に限られ、test-vault を通常の Obsidian で開かない運用が前提。書き込み後に元 bytes へ戻すような一時的 I/O は snapshot だけでは検出できないため、unit mock は Vault/adapter/Editor 経路の read/write を拒否・監視し、レビューの startup-write mutant が落ちることも固定する。
 
@@ -159,13 +159,13 @@ smoke script 自身はアプリを終了/起動しない。restart は `harness:
 
 1. 起動直後にノートも `Kioku/` も読み書きされない（smoke の startup 判定、`Kioku/` 未作成）。
 2. ribbon → デッキ選択の開閉・Escape で Vault の内容ファイルが変わらず、`Kioku/`（空フォルダを含む）が作られない。デッキ選択 root の identity が preflight と一致（smoke）。
-3. トリガータグどおりのデッキと Due/New/Total：既定 `#kioku`、大文字小文字の違い（`#Kioku/医学` は `医学` に合流）、入れ子（子デッキ、親は子を含む）、frontmatter のタグ、コードブロック内のタグは数えない。デッキ外カード件数の注記。ID 重複は同内容なら1枚、異内容なら出題から除外され両パスが注記に出る。トリガータグを2つにすると根（`kioku › …`）が表示される。
-4. 2つのデッキに属するカードが、親デッキ・全デッキ・各デッキのどのセッションでも1回だけ出る。デッキ A で評価したあと、デッキ B で Due でも New でもない（デッキ選択の件数で確認）。
+3. トリガータグどおりのデッキと「新規 / 学習中 / 復習」（LEV-321 から。定義は `docs/m2-design.md` §13）：既定 `#kioku`、大文字小文字の違い（`#Kioku/医学` は `#医学` に合流）、ノートに書かれたタグだけが平らな行になる（書かれていない中間の親は行にならない。書かれた親の行は子のカードも含む）、frontmatter のタグ、コードブロック内のタグは数えない。デッキ外カード件数の注記。ID 重複は同内容なら1枚、異内容なら出題から除外され両パスが注記に出る。トリガータグを2つにすると見出しに根が付く（`#kioku/医学`）。
+4. 2つのデッキに属するカードが、親デッキ・`#kioku` 行（あれば）・各デッキのどのセッションでも1回だけ出る。デッキ A で評価したあと、デッキ B で新規でも復習でもない（デッキ選択の件数で確認）。
 5. 評価で `Kioku/history-YYYY.jsonl` に1行増え、`Kioku/state.json` が更新され、`state.json` が既にあった場合はセッション最初の保存で `state.json.bak` が作られる。ノートの bytes は変わらない。
 6. Skip（`S`、答えの表示前後）で `Kioku/` とノートの bytes が変わらず、同じセッションでは再出題されず、デッキ選択を開き直すと New/Due に残っている。
 7. 途中で閉じる・Escape：評価済みの分だけ履歴にあり、表示中の未評価カードは変化しない。
-8. `harness:quit` → `harness:launch` の再起動で、期日と Due/New/Total が終了前と一致する。`harness:update` 後も `Kioku/` が残る（update は4配布物以外を変えない）。
-9. 新規上限：既定 20 枚。デッキ選択に「今日の新規 残り X 枚」、21 枚目以降は「新規の残りは明日以降」。完了画面の「今日だけ あと10枚」で 10 枚追加され、`state.json` の `today.extraNew` が 10 になる。まだ一度も評価していない Vault（`Kioku/` 無し）で押した場合は `Kioku/` が作られず、その後の最初の評価で `extraNew` が保存される。
+8. `harness:quit` → `harness:launch` の再起動で、期日と各行の「新規 / 学習中 / 復習」が終了前と一致する。`harness:update` 後も `Kioku/` が残る（update は4配布物以外を変えない）。
+9. 新規上限：既定 20 枚。21 枚目以降は今日出ない（LEV-321 からデッキ選択の画面には出さず、その行の `aria-label` に「今日の新規は残り X 枚（残りは明日以降）」、`data-kioku-later` に X が入る。完了画面に「新規 N 枚は明日以降に出題されます」）。完了画面の「今日だけ あと10枚」で 10 枚追加され、`state.json` の `today.extraNew` が 10 になる。まだ一度も評価していない Vault（`Kioku/` 無し）で押した場合は `Kioku/` が作られず、その後の最初の評価で `extraNew` が保存される。
 10. 今日評価したカードが今日の Due に再び出ない（「もう一度」でも次回は翌日以降。日付境界と夏時間は単体テストで固定）。
 11. カードのブロックを別ノートへ移動・ノートを改名しても日程が保持される。ブロック削除 → Undo で同じ ID が戻り日程も戻る。原文の編集・`%%kioku-edit%%` の追加後も日程が保持され、次の評価のイベントの `contentHash` が変わる。
 12. `state.json` を壊す（JSON として不正にする）と読み取り専用になり、理由が表示され、評価ボタンが無効で `state.json` が上書きされない。`state.json` を消すと履歴から再構築され、最初の評価で書き直される。`state.json` を古い版（評価前の `.bak` など）に戻すと、反映済み位置より後ろの履歴が再生されて追いつく（同じ `eventId` の行を手で複製しても二重に数えない）。
@@ -179,6 +179,10 @@ smoke script 自身はアプリを終了/起動しない。restart は `harness:
 14. 答えを表示する前は、問いの `![[…]]`・`![…](…)`・`<img>` の埋め込み内容や dataview などのコードブロックが描画されず（リンク・文字・素のコード表示）、答えの表示後に描画される。閉じた後に描画由来のエラーが console に出ない。
 15. 性能：5,000 ノート / 10,000 カード程度の生成 fixture（専用 Vault 内）で、ribbon からデッキ一覧が表示されるまでの時間を記録する（目安 500 ms 以内、開発機。超えたら `docs/m2-design.md` §3.3 のキャッシュを検討）。
 16. 未検証事項の記録：`Kioku/` の `.json`/`.jsonl` がファイル一覧・検索・グラフにどう出るか（「すべての拡張子を検出」設定の有無）、箇条書き項目の `^kioku-…` が `CachedMetadata.blocks` に入るか、`%%` 内の `#tag` を metadataCache が数えるか、を観察して記録する。
+
+### デッキ選択の ⋯ メニューと macOS のネイティブメニュー（LEV-321）
+
+デッキ選択の ⋯ は Obsidian の公開 `Menu` で、macOS の既定（`nativeMenus` 未設定）では OS のネイティブメニューとして出る。ネイティブメニューは DOM に無く CDP の撮影・操作では扱えず、CDP の合成クリックで開くと画面に残り、その後の `harness:quit` が 60 秒で終わらなかったことがある（LEV-321、2 回目の `harness:quit` で正常終了）。実機の自動確認では、⋯ を開く前に専用インスタンスの Console（CDP）で `app.vault.setConfig('nativeMenus', false)` とし（専用 Vault の `.obsidian/app.json` だけが変わる。smoke の baseline の対象外）、終わったら `app.vault.setConfig('nativeMenus', null)` で戻す。ネイティブメニューでの見た目とキー操作は自動確認できないので、必要なら人が専用インスタンスの画面で確かめる。
 
 ## M3 実機確認（LEV-277、未実施）
 

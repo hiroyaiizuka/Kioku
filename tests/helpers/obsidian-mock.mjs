@@ -24,8 +24,12 @@ export class MockModal {
     this.app = app;
     this.containerEl = document.createElement('div');
     this.modalEl = document.createElement('section');
+    // Obsidian's own × (before the content, with Obsidian 1.14's classes).
+    const closeButton = document.createElement('div');
+    closeButton.className = 'modal-header-button mod-raised clickable-icon';
+    closeButton.addEventListener('click', () => this.close());
     this.contentEl = document.createElement('div');
-    this.modalEl.append(this.contentEl);
+    this.modalEl.append(closeButton, this.contentEl);
     this.containerEl.append(this.modalEl);
     this.scope = new MockScope();
     this.scope.register([], 'Escape', () => { this.close(); return false; });
@@ -49,6 +53,34 @@ export class MockComponent {
   load() { this.loaded = true; }
   unload() { this.unloaded = true; }
 }
+/** Public setIcon: marks the element with the icon ID and replaces its content with one svg, as Obsidian does. */
+export function setIcon(el, id) {
+  el.setAttribute('data-icon', id);
+  el.replaceChildren(el.ownerDocument.createElementNS('http://www.w3.org/2000/svg', 'svg'));
+}
+
+/** Public Menu: shown items are `.menu .menu-item` elements in `document.body`; a click hides the menu and runs the item. */
+export class MockMenu {
+  constructor() { this.items = []; this.el = null; }
+  addItem(build) {
+    const item = { title: '', icon: null, handler: null,
+      setTitle(title) { this.title = title; return this; }, setIcon(icon) { this.icon = icon; return this; },
+      onClick(handler) { this.handler = handler; return this; } };
+    build(item); this.items.push(item); return this;
+  }
+  showAtPosition(position) {
+    this.position = position;
+    this.el = document.body.createDiv({ cls: 'menu' });
+    for (const item of this.items) {
+      const element = this.el.createDiv({ cls: 'menu-item', text: item.title });
+      element.dataset.icon = item.icon ?? '';
+      element.addEventListener('click', () => { this.hide(); item.handler?.(); });
+    }
+    return this;
+  }
+  hide() { this.el?.remove(); this.el = null; return this; }
+}
+
 /** Records what would be rendered as Markdown; the text itself is shown as-is. */
 export const renders = [];
 export const MockMarkdownRenderer = {
@@ -191,7 +223,7 @@ export async function compilePlugin(source, notices) {
   }
   const obsidian = { Plugin: MockPlugin, Modal: MockModal, Scope: MockScope, MarkdownView: MockMarkdownView, Notice: MockNotice, TFile: MockTFile,
     Component: MockComponent, MarkdownRenderer: MockMarkdownRenderer, parseFrontMatterTags, PluginSettingTab: MockPluginSettingTab,
-    Setting: MockSetting, requestUrl };
+    Setting: MockSetting, Menu: MockMenu, setIcon, requestUrl };
   const module = { exports: {} };
   // Timers resolve globalThis at call time so vitest fake timers control the plugin's window timers.
   const timers = { setTimeout: (...args) => globalThis.setTimeout(...args), clearTimeout: (id) => globalThis.clearTimeout(id),

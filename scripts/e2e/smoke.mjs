@@ -104,7 +104,8 @@ try {
     assertNoForeignModal(await client.value(modalInventoryExpression));
     const shot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     atomicWrite(root, join(output, `deck-picker-${run}.png`), Buffer.from(shot.data, 'base64'));
-    await click('.kioku-deck-picker-close');
+    // Obsidian's own × (the picker has no separate close button); its class changed in Obsidian 1.14.
+    await click(`${pickerSelector} > .modal-header-button, ${pickerSelector} > .modal-close-button`);
     await waitFor(client, count(pickerSelector), 0);
     report.steps.push({ operation: `ribbon → deck picker → close (${run})`, status: 'PASS', observed });
     unchanged(`after deck picker open/close ${run}`);
